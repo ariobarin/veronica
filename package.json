@@ -17,7 +17,8 @@
     "dev": "tsx src/cli.ts",
     "dev:gateway": "tsx src/server.ts",
     "start": "node dist/server.js",
-    "test": "tsx --test test/**/*.test.ts"
+    "test": "tsx --test test/**/*.test.ts",
+    "test:coverage": "tsx --test --experimental-test-coverage test/**/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
