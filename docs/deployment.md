@@ -44,15 +44,19 @@ The workflow builds and checks Veronica, installs the pinned Node.js runtime, up
 
 The workflow can be rerun for the same commit. It preserves `/etc/veronica.env`, reuses the release, and keeps the five newest releases.
 
-## Retrieve the token
+## Retrieve the token securely
 
-Retrieve the production token only in a trusted terminal with VPS access:
+When direct VPS SSH is unavailable, use the Relay `Deploy Veronica` workflow with the `export-token` operation. Generate a one-time RSA key pair on the requesting workstation and submit only the base64-encoded public key. The workflow encrypts the production token on the VPS with RSA OAEP and SHA-256, then publishes the encrypted value as a one-day artifact. Decrypt it locally, store it in a protected environment or secret store, and delete the encrypted artifact plus both one-time key files.
+
+The private key must never enter GitHub, workflow inputs, logs, pull requests, issues, or chat. The workflow must never print or upload the plaintext token.
+
+Direct retrieval remains available in a trusted terminal with VPS access:
 
 ```bash
 ssh root@VPS_HOST "sed -n 's/^VERONICA_TOKEN=//p' /etc/veronica.env"
 ```
 
-Store it in a protected local environment or secret store. Do not place it in Git, GitHub Actions output, pull requests, issues, or chat.
+Do not place the plaintext token in Git, GitHub Actions output, pull requests, issues, or chat.
 
 ## Connect a workstation
 
