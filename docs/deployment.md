@@ -1,120 +1,195 @@
 # Deploy Veronica
 
-The production gateway runs as one Node.js process on the Ariobarin VPS. It listens only on `127.0.0.1:39100` and the Relay WireGuard address `10.0.0.1:39100`.
+This guide describes the supported production boundary without assuming a particular hosting provider, domain, identity provider, reverse proxy, or CI system.
 
-Traffic is split by trust boundary:
+## Target architecture
 
-```text
-external MCP client -> https://veronica.ariobarin.com/mcp -> Relay Caddy -> 127.0.0.1:39100
-enrolled workstation -> WireGuard -> http://10.0.0.1:39100/device/*
-```
-
-Relay Caddy also publishes `/healthz`. It returns `404` for public `/device/*` requests. Port `39100` is not bound to the public interface and must not have a public firewall or DNAT rule. Cloudflare Tunnel is not used for worker traffic.
-
-## Deployment layout
+Use one gateway host with a public HTTPS reverse proxy and a private network interface:
 
 ```text
-/opt/veronica/releases/<git-sha>
-/opt/veronica/current -> /opt/veronica/releases/<git-sha>
-/etc/veronica.env
-/etc/systemd/system/veronica.service
-/var/lib/veronica
+external MCP client -> https://veronica.example.com/mcp -> reverse proxy -> 127.0.0.1:39100
+enrolled worker -> private network -> http://10.20.0.1:39100/device/*
 ```
 
-The `veronica` system user runs the gateway. `/etc/veronica.env` is owned by root with mode `600`. The deployment workflow creates a random production device token only when that file does not exist. Subsequent deploys preserve the token while enforcing the approved listener, host, and OAuth resource configuration.
+The gateway process listens only on loopback and the gateway private address. The reverse proxy publishes the MCP endpoint, health endpoint, and OAuth protected resource metadata. It never publishes worker routes. Port `39100` has no public firewall rule, port forward, tunnel, or DNAT rule.
 
-## Public routing
+WireGuard is the recommended private network because it works across ordinary NAT and has a small operational surface. Another operator controlled private network is acceptable when it preserves the same boundary.
 
-The existing Relay Caddy process keeps its layer 4 SNI routes for other services. The Veronica SNI route forwards TLS to a loopback-only HTTPS listener in the same Caddy process, which proxies only `/mcp`, `/healthz`, and `/.well-known/oauth-protected-resource` to the gateway.
+## Choose deployment values
 
-`veronica.ariobarin.com` must have a DNS-only A record for the Relay VPS public address before deployment. Caddy obtains and renews the certificate. Do not enable Cloudflare proxying unless the certificate strategy is deliberately revised and validated.
+Define these values before installing anything:
 
-An interrupted earlier setup may have installed the `cloudflared` package. An installed package alone is not an active tunnel. Before changing it, inspect its service, configuration, origin certificate, and tunnel credentials. The verified Relay state had no service unit, configuration, origin certificate, or tunnel credentials, so the package is retained but unused.
+| Purpose | Example |
+| --- | --- |
+| Public MCP origin | `https://veronica.example.com` |
+| OAuth resource and audience | `https://veronica.example.com/` |
+| OAuth issuer | `https://identity.example.com/` |
+| Gateway loopback address | `127.0.0.1` |
+| Gateway private address | `10.20.0.1` |
+| Gateway port | `39100` |
+| Worker name | `laptop` |
+| Exposed worker root | `/home/user/code` |
 
-## OAuth identity provider
+Keep the public origin and OAuth resource distinct where the trailing slash matters. `VERONICA_OAUTH_AUDIENCE` must exactly equal `VERONICA_OAUTH_RESOURCE`.
 
-The production authorization server is an established OAuth 2.1 identity provider. Configure one API or resource with the exact identifier `https://veronica.ariobarin.com/` and the permissions `veronica:read` and `veronica:write`. Enable authorization code flow with PKCE, Client ID Metadata Document registration, and RFC 8707 resource parameter compatibility. Ensure the intended user connection can grant both permissions.
+## Configure the identity provider
 
-For Auth0, create the API with RS256 signing, add both permissions, enable RBAC plus permissions in access tokens, then enable Client ID Metadata Document Registration and Resource Parameter Compatibility Profile under tenant advanced settings. Set the Relay repository variable `VERONICA_OAUTH_ISSUER` to the tenant issuer URL, including its trailing slash. The audience and resource are fixed by the deployment workflow.
+Create one API or protected resource with the two permissions `veronica:read` and `veronica:write`.
 
-Do not store an Auth0 client secret in Veronica. ChatGPT registers as a public OAuth client and uses authorization code flow with PKCE.
+Veronica accepts access tokens that meet all of these conditions:
 
-## Deploy
+- JWT signed with RS256
+- Exact configured issuer
+- Exact configured audience
+- Unexpired `exp` claim
+- Client identifier in `client_id`, `azp`, or `sub`
+- Both permissions in the space separated `scope` claim or the `permissions` array
 
-Run the `Deploy Veronica` workflow in `ariobarin/relay`.
+The provider must publish a JWKS endpoint over HTTPS. Veronica uses `<issuer>/.well-known/jwks.json` unless `VERONICA_OAUTH_JWKS_URI` is set.
 
-1. Use `inspect` to capture the current WireGuard, Caddy, gateway, and cloudflared state.
-2. Use `validate` to validate the repository Caddyfile with the VPS Caddy binary without installing it.
-3. Create the DNS-only A record after validation succeeds.
-4. Use `deploy` with the intended Veronica Git ref.
+Remote MCP clients commonly use authorization code with PKCE. Some clients also require dynamic client registration or Client ID Metadata Document registration. Enable only the registration features required by the intended client, and grant the client and user both Veronica permissions.
 
-The workflow builds and checks Veronica, validates the configured OAuth issuer, installs the pinned Node.js runtime, uploads a release, changes the `current` symlink atomically, restarts the gateway, installs the validated Caddy configuration, and reloads Caddy. It refuses to replace a live Caddyfile that does not match repository history. Gateway, OAuth metadata, or Caddy health failures trigger rollback.
+Do not configure an OAuth client secret in Veronica. The gateway validates access tokens but does not act as an OAuth client.
 
-The workflow can be rerun for the same commit. It preserves `/etc/veronica.env`, reuses the release, and keeps the five newest releases.
+## Install the gateway
 
-## Retrieve the device token securely
-
-When direct VPS SSH is unavailable, use the Relay `Deploy Veronica` workflow with the `export-token` operation. Generate a one-time RSA key pair on the requesting workstation and submit only the base64-encoded public key. The workflow encrypts the production device token on the VPS with RSA OAEP and SHA-256, then publishes the encrypted value as a one-day artifact. Decrypt it locally, store it in a protected environment or secret store, and delete the encrypted artifact plus both one-time key files.
-
-The private key must never enter GitHub, workflow inputs, logs, pull requests, issues, or chat. The workflow must never print or upload the plaintext token.
-
-Direct retrieval remains available in a trusted terminal with VPS access. Existing deployments may retain the legacy variable name during migration:
+Create a dedicated unprivileged user and release directories on the Linux gateway:
 
 ```bash
-ssh root@VPS_HOST "sed -n -e 's/^VERONICA_DEVICE_TOKEN=//p' -e 's/^VERONICA_TOKEN=//p' /etc/veronica.env | head -n 1"
+sudo useradd --system --home /var/lib/veronica --create-home --shell /usr/sbin/nologin veronica
+sudo install -d -o veronica -g veronica /opt/veronica/releases
 ```
 
-Do not place the plaintext token in Git, GitHub Actions output, pull requests, issues, or chat.
+Clone and build a reviewed revision, then copy it into a revision named release directory:
 
-## Connect a workstation
+```bash
+git clone https://github.com/ariobarin/veronica.git
+cd veronica
+git checkout <reviewed-commit-or-tag>
+npm ci --ignore-scripts
+npm run check
+sudo cp -a . "/opt/veronica/releases/$(git rev-parse HEAD)"
+sudo ln -sfn "/opt/veronica/releases/$(git rev-parse HEAD)" /opt/veronica/current
+```
 
-Connect the workstation to the existing Relay WireGuard network first. Install the same Veronica revision, set `VERONICA_TOKEN` from the protected local source, and expose the smallest useful directory:
+Production automation should build in a temporary directory, upload a complete release, and replace the `current` symlink atomically only after validation.
+
+## Configure the gateway
+
+Copy [deploy/veronica.env.example](../deploy/veronica.env.example) to `/etc/veronica.env`, replace every example value, and generate a random worker token:
+
+```bash
+openssl rand -hex 32
+sudo chmod 600 /etc/veronica.env
+sudo chown root:root /etc/veronica.env
+```
+
+Install [deploy/veronica.service](../deploy/veronica.service), then start the gateway:
+
+```bash
+sudo cp deploy/veronica.service /etc/systemd/system/veronica.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now veronica
+sudo systemctl status veronica
+```
+
+The environment should have this shape:
+
+```dotenv
+VERONICA_DEVICE_TOKEN=<random value with at least 32 characters>
+VERONICA_OAUTH_ISSUER=https://identity.example.com/
+VERONICA_OAUTH_AUDIENCE=https://veronica.example.com/
+VERONICA_OAUTH_RESOURCE=https://veronica.example.com/
+HOSTS=127.0.0.1,10.20.0.1
+PORT=39100
+VERONICA_ALLOWED_HOSTS=veronica.example.com,10.20.0.1,127.0.0.1,localhost
+```
+
+Verify that the process runs as `veronica`, the environment file is mode `600`, and listener output contains only the approved addresses.
+
+## Configure the private network
+
+Enroll each worker in WireGuard or the chosen private network. Allow worker peers to reach only the gateway private address and port needed for Veronica. Do not route the gateway public interface to port `39100`.
+
+From each worker, verify private reachability before starting Veronica:
+
+```bash
+curl --fail http://10.20.0.1:39100/healthz
+```
+
+On Windows PowerShell:
 
 ```powershell
-$env:VERONICA_TOKEN = "<production token from a protected source>"
-npm run dev -- expose "C:\Users\Administrator\Desktop\repos" `
-  --name desktop `
-  --gateway "http://10.0.0.1:39100"
+Test-NetConnection 10.20.0.1 -Port 39100
+Invoke-RestMethod http://10.20.0.1:39100/healthz
 ```
 
-The worker uses WireGuard for every `/device/*` request. It must not use the public hostname. Stopping the process removes the workstation connection.
+## Configure public HTTPS
+
+Create the public DNS record and configure the existing reverse proxy if it can be changed safely. Preserve every existing listener and route.
+
+The public virtual host must:
+
+- Proxy `/mcp` to `http://127.0.0.1:39100`
+- Proxy `/healthz` to `http://127.0.0.1:39100`
+- Proxy `/.well-known/oauth-protected-resource` to `http://127.0.0.1:39100`
+- Return `404` for `/device/*`
+- Return `404` for other unneeded paths
+
+Validate the complete proxy configuration before reload. Capture critical existing route behavior before and after the change.
+
+A managed tunnel may publish the three public paths only when integrating the existing reverse proxy would create material risk. It must never publish `/device/*` or make port `39100` public. Inspect any existing tunnel before modifying or deleting it.
+
+## Connect workers
+
+Install the same reviewed Veronica revision on the worker, run `npm link` once to install the CLI, retrieve the shared device token through a protected channel, and expose the smallest useful root:
+
+```bash
+cd /path/to/veronica
+npm link
+export VERONICA_TOKEN="<protected worker token>"
+export VERONICA_GATEWAY="http://10.20.0.1:39100"
+cd "$HOME/code"
+veronica expose --name laptop
+```
+
+Use a service manager or scheduled task if the worker must reconnect after reboot. Run it as a dedicated account when unattended access is required. The account permissions define what `run_command` can do.
 
 ## Verify
 
-On the VPS:
+On the gateway:
 
 ```bash
 systemctl is-active veronica
-systemctl is-active caddy
-curl --fail --silent --show-error http://127.0.0.1:39100/healthz
-curl --fail --silent --show-error http://10.0.0.1:39100/healthz
+curl --fail http://127.0.0.1:39100/healthz
+curl --fail http://10.20.0.1:39100/healthz
 ss -ltnp | grep ':39100'
 ```
 
-The listener output must include only `127.0.0.1:39100` and `10.0.0.1:39100`. It must not include `0.0.0.0:39100` or the VPS public address.
-
-From an external machine:
+From outside the private network:
 
 ```bash
-./scripts/remote-health-check.sh
+./scripts/remote-health-check.sh https://veronica.example.com
 ```
 
-An authenticated MCP smoke test must list the workstation, open a workspace, read and write a disposable file, run a harmless command, close the workspace, and remove the disposable file. Run the full checklist in [deployment-acceptance.md](deployment-acceptance.md).
+Also prove that a direct connection to the gateway public address on port `39100` fails. Complete the authenticated and recovery checks in [deployment-acceptance.md](deployment-acceptance.md).
 
-## Operate
+## Upgrade and roll back
 
-Restart the gateway with:
+Build and test each new revision in a new release directory. Change the `current` symlink atomically, restart Veronica, and repeat private and public health checks. Keep several known good releases.
 
-```bash
-systemctl restart veronica
-```
+To roll back, point `current` to a previous release, restart Veronica, and repeat the same checks. Restore the previous reverse proxy configuration if public routing changed.
 
-Workers retry after connection errors and register again after the gateway loses its in-memory device state.
+The gateway stores devices, jobs, and workspace leases in memory. Workers register again after a restart. A deployment must preserve `/etc/veronica.env` unless token rotation is intentional.
 
-Rotate the device token by replacing `VERONICA_DEVICE_TOKEN` in `/etc/veronica.env`, restarting Veronica, and updating each enrolled worker. Verify that the old token receives `401` on `/device/*` before considering rotation complete. Revoke MCP access through the identity provider.
+## Rotate and revoke access
 
-Roll back by selecting a prior directory under `/opt/veronica/releases`, changing the `current` symlink atomically, restarting Veronica, and checking both private listener addresses plus public health. Restore the prior repository Caddyfile and reload Caddy if public routing changed. The Relay workflow performs these rollbacks automatically when a deployment fails verification.
+Rotate the worker token by replacing `VERONICA_DEVICE_TOKEN`, restarting the gateway, and updating every enrolled worker. Confirm the old token receives `401` from `/device/*`.
+
+Revoke MCP access in the identity provider. Do not expose access tokens, worker tokens, private keys, environment files, or logs containing credentials through CI artifacts or support records.
 
 ## Security limits
 
-The prototype uses OAuth for MCP clients and one shared bearer token for workers. It has no database, rate limiting, per-device identity, local approval prompt, or durable audit log. Shell commands run with the workstation user's permissions and environment. Expose narrow roots, use a dedicated workstation account for unattended access, and use a container or virtual machine for untrusted repositories.
+The prototype uses OAuth for MCP clients and one shared bearer token for workers. It has no database, rate limiting, per-device identity, local approval prompt, or durable audit log. Shell commands run with the worker account permissions and environment. Expose narrow roots and use a container or virtual machine for untrusted repositories.
+
+Environment specific procedures should live in a separate operator file. See [deployment-ariobarin.md](deployment-ariobarin.md) for the maintainer deployment without treating its values as defaults.
