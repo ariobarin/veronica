@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Veronica inverse mark</title>
+  <desc id="desc">A minimal V-shaped gateway above a centered point representing an explicitly selected remote workspace.</desc>
+  <g fill="none" stroke="#F8FAFC" stroke-width="24" stroke-linecap="round">
+    <path d="M52 48 118 154"/>
+    <path d="M204 48 138 154"/>
+  </g>
+  <circle cx="128" cy="207" r="14" fill="#F8FAFC"/>
+</svg>
