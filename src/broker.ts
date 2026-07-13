@@ -227,8 +227,14 @@ export class Broker {
   }
 
   private pruneStaleDevices(): void {
+    const busyDeviceIds = new Set([...this.pendingJobs.values()].map(job => job.deviceId));
     const staleIds = [...this.devices.values()]
-      .filter(device => this.now() - device.lastSeenAt > this.deviceRetentionMs)
+      .filter(
+        device =>
+          this.now() - device.lastSeenAt > this.deviceRetentionMs &&
+          device.queue.length === 0 &&
+          !busyDeviceIds.has(device.id)
+      )
       .map(device => device.id);
     for (const deviceId of staleIds) this.disconnectDevice(deviceId, "Device record expired");
   }

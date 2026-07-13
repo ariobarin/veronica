@@ -108,9 +108,15 @@ export async function resolveExposeRoot(
   }
 
   const root = await canonicalizeRoot(selected);
-  const home = await canonicalizeRoot(options.home ?? os.homedir());
+  let home: string | undefined;
+  try {
+    home = await canonicalizeRoot(options.home ?? os.homedir());
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String(error.code) : undefined;
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+  }
   const filesystemRoot = path.parse(root).root;
-  if (!options.allowBroadRoot && (samePath(root, home) || samePath(root, filesystemRoot))) {
+  if (!options.allowBroadRoot && ((home !== undefined && samePath(root, home)) || samePath(root, filesystemRoot))) {
     throw new Error("Refusing to expose a home or filesystem root. Pass --allow-broad-root to confirm this boundary.");
   }
 

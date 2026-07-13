@@ -281,7 +281,7 @@ export function createGatewayApp(auth: GatewayAuthOptions, broker = new Broker()
   app.post("/device/register", deviceAuth, (req, res) => {
     try {
       const input = registerDeviceSchema.parse(req.body);
-      const deviceId = broker.registerDevice(input.name, input.platform, input.rootLabel);
+      const deviceId = broker.registerDevice(input.name, input.platform, input.rootLabel ?? input.name);
       res.status(201).json({ deviceId });
     } catch (error) {
       res.status(statusForError(error)).json({ error: toWorkerError(error) });

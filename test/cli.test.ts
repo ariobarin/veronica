@@ -83,6 +83,18 @@ test("CLI requires explicit confirmation for broad roots", async t => {
   assert.equal(selected.source, "explicit");
 });
 
+test("CLI allows safe explicit roots when the configured home is missing", async t => {
+  const rootInput = await mkdtemp(path.join(os.tmpdir(), "veronica-cli-safe-"));
+  t.after(() => rm(rootInput, { recursive: true, force: true }));
+
+  const selected = await resolveExposeRoot(rootInput, {
+    cwd: rootInput,
+    home: path.join(rootInput, "missing-home")
+  });
+  assert.equal(selected.root, await realpath(rootInput));
+  assert.equal(selected.source, "explicit");
+});
+
 test("CLI requires a path outside a Git worktree", async () => {
   await assert.rejects(
     resolveExposeRoot(undefined, {

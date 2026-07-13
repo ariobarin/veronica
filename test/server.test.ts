@@ -119,6 +119,13 @@ test("gateway separates public OAuth from private device authentication", async 
   });
   assert.equal(deviceAccepted.status, 201);
 
+  const legacyDeviceAccepted = await fetch(`${baseUrl}/device/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${"d".repeat(32)}` },
+    body: JSON.stringify({ name: "legacy", platform: "win32", hostname: "legacy-host" })
+  });
+  assert.equal(legacyDeviceAccepted.status, 201);
+
   const initialize = await fetch(`${baseUrl}/mcp`, {
     method: "POST",
     headers: {

@@ -72,6 +72,27 @@ test("broker prunes stale device records after the retention window", () => {
   assert.deepEqual(broker.listDevices(), []);
 });
 
+test("broker retains stale devices while a delivered job is pending", async () => {
+  let now = 1_000;
+  const broker = new Broker({
+    now: () => now,
+    deviceOnlineWindowMs: 100,
+    deviceRetentionMs: 500
+  });
+  const deviceId = broker.registerDevice("desktop", "linux/x64", "project");
+  const opening = broker.openWorkspace("desktop", "repo");
+  const job = await broker.pollDevice(deviceId, 0);
+  assert.equal(job?.request.type, "open_workspace");
+
+  now += 501;
+  assert.equal(broker.listDevices().length, 1);
+  assert.equal(broker.completeJob(deviceId, job!.id, { ok: true, value: { path: "repo" } }), true);
+  await opening;
+
+  now += 501;
+  assert.deepEqual(broker.listDevices(), []);
+});
+
 test("broker removes queued jobs when their caller times out", async () => {
   const broker = new Broker();
   const deviceId = broker.registerDevice("desktop", "linux/x64");
