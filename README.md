@@ -46,7 +46,14 @@ npm run build
 npm test
 ```
 
-The package is currently private to the repository, so installation starts from a Git checkout rather than a registry package.
+The package is currently private to the repository, so installation starts from a Git checkout rather than a registry package. On each worker, install the built CLI into npm's global command directory:
+
+```bash
+npm link
+veronica --help
+```
+
+If `veronica` is not found, print the npm command directory with `npm prefix --global` and add that directory to `PATH`. On Windows, the default is `%APPDATA%\npm`; verify the installed shim with `where.exe veronica`. On Linux or macOS, use `command -v veronica`.
 
 ### 3. Start the gateway
 
@@ -102,25 +109,33 @@ See [docs/deployment.md](docs/deployment.md) for a provider neutral reverse prox
 
 Copy the same device token to the worker through a protected secret channel. Never put it in Git, chat, shell history, or CI logs.
 
+Set the private gateway URL and load the worker token from a protected secret source. The current prototype reads these values from the environment and does not provide built-in credential storage.
+
 On Linux or macOS:
 
 ```bash
+export VERONICA_GATEWAY="http://10.20.0.1:39100"
 export VERONICA_TOKEN="<worker token>"
-npm run dev -- expose "$HOME/code" \
-  --name laptop \
-  --gateway "http://10.20.0.1:39100"
+cd "$HOME/code"
+veronica expose
 ```
 
 On Windows PowerShell:
 
 ```powershell
+$env:VERONICA_GATEWAY = "http://10.20.0.1:39100"
 $env:VERONICA_TOKEN = "<worker token>"
-npm run dev -- expose "C:\Users\you\code" `
-  --name laptop `
-  --gateway "http://10.20.0.1:39100"
+Set-Location "C:\Users\you\code"
+veronica expose
 ```
 
-Expose the smallest useful root. The worker must use the private gateway address, not the public hostname.
+`veronica expose` exposes the current directory and uses the computer hostname as the device name. Supply a path or `--name` only when you want different values:
+
+```bash
+veronica expose /home/user/code --name laptop
+```
+
+Expose the smallest useful root. The worker must use the private gateway address, not the public hostname. Keep the command running, and stop the worker with `Ctrl+C`.
 
 ### 6. Connect an MCP client
 

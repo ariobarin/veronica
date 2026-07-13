@@ -142,11 +142,15 @@ A managed tunnel may publish the three public paths only when integrating the ex
 
 ## Connect workers
 
-Install the same reviewed Veronica revision on the worker, retrieve the shared device token through a protected channel, and expose the smallest useful root:
+Install the same reviewed Veronica revision on the worker, run `npm link` once to install the CLI, retrieve the shared device token through a protected channel, and expose the smallest useful root:
 
 ```bash
+cd /path/to/veronica
+npm link
 export VERONICA_TOKEN="<protected worker token>"
-npm run dev -- expose "$HOME/code" --name laptop --gateway "http://10.20.0.1:39100"
+export VERONICA_GATEWAY="http://10.20.0.1:39100"
+cd "$HOME/code"
+veronica expose --name laptop
 ```
 
 Use a service manager or scheduled task if the worker must reconnect after reboot. Run it as a dedicated account when unattended access is required. The account permissions define what `run_command` can do.
