@@ -36,7 +36,8 @@ Run from outside the Relay WireGuard network:
 Pass criteria:
 
 - `/healthz` returns the Veronica health document over valid HTTPS.
-- unauthenticated `/mcp` returns `401`.
+- `/.well-known/oauth-protected-resource` identifies the Veronica resource, authorization server, and both supported scopes.
+- unauthenticated `/mcp` returns `401` with `scope` and `resource_metadata` in `WWW-Authenticate`.
 - `/device/register` returns `404`, proving worker routes are not public.
 - a direct connection to public port `39100` fails.
 
@@ -53,7 +54,7 @@ Start the worker with `--gateway "http://10.0.0.1:39100"`. Confirm that the gate
 
 ## Authenticated MCP flow
 
-Using the production token through `https://veronica.ariobarin.com/mcp`:
+Connect `https://veronica.ariobarin.com/mcp` in ChatGPT with OAuth. Complete the identity provider login and consent flow, then:
 
 1. List devices and find the workstation.
 2. Open a workspace below its exposed root.
@@ -64,7 +65,9 @@ Using the production token through `https://veronica.ariobarin.com/mcp`:
 7. Remove the disposable file.
 8. Close the workspace.
 
-Do not include the production token or sensitive file contents in the test record.
+Do not include access tokens, the production device token, or sensitive file contents in the test record.
+
+The device token must fail on `/mcp`. An OAuth token must fail on `/device/register`, `/device/poll`, and `/device/result`.
 
 ## Recovery and idempotency
 

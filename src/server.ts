@@ -1,11 +1,21 @@
-import express, { type NextFunction, type Request, type Response } from "express";
+import express, { type Request, type Response } from "express";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
+import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import { z } from "zod/v4";
+import {
+  JwtAccessTokenVerifier,
+  protectedResourceMetadata,
+  requireDeviceToken,
+  resolveOAuthConfig,
+  resourceMetadataUrl,
+  type VeronicaOAuthConfig
+} from "./auth.js";
 import { Broker } from "./broker.js";
 import {
   DEFAULT_COMMAND_TIMEOUT_SECONDS,
@@ -25,6 +35,8 @@ const commandValueSchema = z.object({
   truncated: z.boolean(),
   timedOut: z.boolean()
 });
+const oauthSecuritySchemes = [{ type: "oauth2", scopes: ["veronica:read", "veronica:write"] }] as const;
+const oauthToolMeta = { securitySchemes: oauthSecuritySchemes };
 
 function jsonResult(value: Record<string, unknown>) {
   return {
@@ -59,7 +71,8 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
       title: "List Veronica devices",
       description: "List computers currently known to the Veronica gateway.",
       inputSchema: {},
-      annotations: { readOnlyHint: true }
+      annotations: { readOnlyHint: true },
+      _meta: oauthToolMeta
     },
     async () => jsonResult({ devices: broker.listDevices() })
   );
@@ -72,7 +85,8 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
       inputSchema: {
         device: z.string().min(1),
         path: z.string().min(1).default(".")
-      }
+      },
+      _meta: oauthToolMeta
     },
     async ({ device, path: workspacePath }) => {
       try {
@@ -97,7 +111,8 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
         workspace_id: z.string().uuid(),
         path: z.string().min(1)
       },
-      annotations: { readOnlyHint: true }
+      annotations: { readOnlyHint: true },
+      _meta: oauthToolMeta
     },
     async ({ workspace_id: workspaceId, path: filePath }) => {
       try {
@@ -125,7 +140,8 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
         path: z.string().min(1),
         content: z.string()
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+      _meta: oauthToolMeta
     },
     async ({ workspace_id: workspaceId, path: filePath, content }) => {
       try {
@@ -152,7 +168,8 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
         workspace_id: z.string().uuid(),
         command: z.string().min(1),
         timeout_seconds: z.number().int().min(1).max(MAX_COMMAND_TIMEOUT_SECONDS).default(DEFAULT_COMMAND_TIMEOUT_SECONDS)
-      }
+      },
+      _meta: oauthToolMeta
     },
     async ({ workspace_id: workspaceId, command, timeout_seconds: timeoutSeconds }) => {
       try {
@@ -180,26 +197,13 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
       title: "Close Veronica workspace",
       description: "Forget an open workspace lease.",
       inputSchema: { workspace_id: z.string().uuid() },
-      annotations: { idempotentHint: true }
+      annotations: { idempotentHint: true },
+      _meta: oauthToolMeta
     },
     async ({ workspace_id: workspaceId }) => jsonResult({ closed: broker.closeWorkspace(workspaceId) })
   );
 
   return server;
-}
-
-function requireToken(token: string) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    if (req.path === "/healthz") {
-      next();
-      return;
-    }
-    if (req.headers.authorization !== `Bearer ${token}`) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    next();
-  };
 }
 
 function statusForError(error: unknown): number {
@@ -224,15 +228,24 @@ export function resolveListenHosts(): string[] {
   return hosts;
 }
 
-export function createGatewayApp(token: string, broker = new Broker()) {
+export interface GatewayAuthOptions {
+  deviceToken: string;
+  oauth: VeronicaOAuthConfig;
+  verifier?: OAuthTokenVerifier;
+}
+
+export function createGatewayApp(auth: GatewayAuthOptions, broker = new Broker()) {
   const host = resolveListenHosts()[0];
   const app = createMcpExpressApp({ host, allowedHosts: resolveAllowedHosts() });
   app.use(express.json({ limit: "2mb" }));
-  app.use(requireToken(token));
 
   app.get("/healthz", (_req, res) => res.json({ ok: true, service: "veronica" }));
+  app.get("/.well-known/oauth-protected-resource", (_req, res) => {
+    res.json(protectedResourceMetadata(auth.oauth));
+  });
 
-  app.post("/device/register", (req, res) => {
+  const deviceAuth = requireDeviceToken(auth.deviceToken);
+  app.post("/device/register", deviceAuth, (req, res) => {
     try {
       const input = registerDeviceSchema.parse(req.body);
       const deviceId = broker.registerDevice(input.name, input.platform);
@@ -242,7 +255,7 @@ export function createGatewayApp(token: string, broker = new Broker()) {
     }
   });
 
-  app.post("/device/poll", async (req, res) => {
+  app.post("/device/poll", deviceAuth, async (req, res) => {
     try {
       const input = pollDeviceSchema.parse(req.body);
       const job = await broker.pollDevice(input.deviceId, input.waitMs);
@@ -252,7 +265,7 @@ export function createGatewayApp(token: string, broker = new Broker()) {
     }
   });
 
-  app.post("/device/result", (req, res) => {
+  app.post("/device/result", deviceAuth, (req, res) => {
     try {
       const input = submitResultSchema.parse(req.body);
       broker.completeJob(input.deviceId, input.jobId, input.result);
@@ -261,6 +274,15 @@ export function createGatewayApp(token: string, broker = new Broker()) {
       res.status(statusForError(error)).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });
+
+  app.use(
+    "/mcp",
+    requireBearerAuth({
+      verifier: auth.verifier ?? new JwtAccessTokenVerifier(auth.oauth),
+      requiredScopes: auth.oauth.scopes,
+      resourceMetadataUrl: resourceMetadataUrl(auth.oauth)
+    })
+  );
 
   app.post("/mcp", async (req: Request, res: Response) => {
     const server = createVeronicaMcpServer(broker);
@@ -297,16 +319,16 @@ export function createGatewayApp(token: string, broker = new Broker()) {
 }
 
 export function startServer() {
-  const token = process.env.VERONICA_TOKEN;
-  if (!token || token.length < 32) {
-    throw new Error("VERONICA_TOKEN must be set to a random value of at least 32 characters");
+  const deviceToken = process.env.VERONICA_DEVICE_TOKEN ?? process.env.VERONICA_TOKEN;
+  if (!deviceToken || deviceToken.length < 32) {
+    throw new Error("VERONICA_DEVICE_TOKEN must be set to a random value of at least 32 characters");
   }
 
   const hosts = resolveListenHosts();
   const port = Number.parseInt(process.env.PORT ?? "3000", 10);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid PORT: ${process.env.PORT}`);
 
-  const app = createGatewayApp(token);
+  const app = createGatewayApp({ deviceToken, oauth: resolveOAuthConfig() });
   return hosts.map(host =>
     app.listen(port, host, () => {
       console.error(`Veronica gateway listening on http://${host}:${port}`);

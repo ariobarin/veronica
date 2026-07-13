@@ -48,7 +48,8 @@ The worker polls the gateway over an operator-controlled private network. There 
 Requirements:
 
 - Node.js 20 or newer
-- A random shared token of at least 32 characters
+- A random device token of at least 32 characters
+- An OAuth 2.1 identity provider for MCP clients
 
 Install and build:
 
@@ -60,14 +61,17 @@ npm run build
 Start the gateway:
 
 ```bash
-export VERONICA_TOKEN="$(openssl rand -hex 32)"
+export VERONICA_DEVICE_TOKEN="$(openssl rand -hex 32)"
+export VERONICA_OAUTH_ISSUER="https://your-tenant.example.com/"
+export VERONICA_OAUTH_AUDIENCE="https://veronica.example.com/"
+export VERONICA_OAUTH_RESOURCE="https://veronica.example.com/"
 npm run dev:gateway
 ```
 
 In another terminal, expose a directory:
 
 ```bash
-export VERONICA_TOKEN="the-same-token"
+export VERONICA_TOKEN="the-same-device-token"
 npm run dev -- expose ~/code --name desktop
 ```
 
@@ -77,7 +81,7 @@ The MCP endpoint is:
 http://127.0.0.1:3000/mcp
 ```
 
-Send the same token as an HTTP bearer token. In a deployed setup, put the gateway behind HTTPS and keep the Node process bound to a private or loopback interface.
+MCP clients discover the OAuth authorization server at `/.well-known/oauth-protected-resource` and send a scoped access token. The shared device token is accepted only on `/device/*`. In a deployed setup, put the gateway behind HTTPS and keep the Node process bound to a private or loopback interface.
 
 ## Deploy
 
