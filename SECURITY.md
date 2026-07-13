@@ -20,8 +20,10 @@ The shared bearer token protects both MCP and worker endpoints. Use a random val
 
 ## Safe deployment guidance
 
-- Bind the Node process to loopback or a private interface.
-- Put public traffic behind a maintained HTTPS reverse proxy.
+- Bind the Node process only to loopback and the VPS WireGuard interface.
+- Publish only `/mcp` and `/healthz` through a maintained HTTPS reverse proxy.
+- Keep `/device/*` on WireGuard. Do not add public forwarding or DNAT for port `39100`.
+- Do not use Cloudflare Tunnel for worker traffic.
 - Expose the smallest useful directory.
 - Run the worker under a dedicated operating system account when practical.
 - Use a container or VM for untrusted repositories or unattended work.

@@ -1,6 +1,15 @@
 # Deploy Veronica
 
-The production gateway runs as one Node.js process on the Ariobarin VPS. It binds to `127.0.0.1:39100` and Cloudflare Tunnel publishes `https://veronica.ariobarin.com`. The VPS routes requests but does not run workstation commands.
+The production gateway runs as one Node.js process on the Ariobarin VPS. It listens only on `127.0.0.1:39100` and the Relay WireGuard address `10.0.0.1:39100`.
+
+Traffic is split by trust boundary:
+
+```text
+external MCP client -> https://veronica.ariobarin.com/mcp -> Relay Caddy -> 127.0.0.1:39100
+enrolled workstation -> WireGuard -> http://10.0.0.1:39100/device/*
+```
+
+Relay Caddy also publishes `/healthz`. It returns `404` for public `/device/*` requests. Port `39100` is not bound to the public interface and must not have a public firewall or DNAT rule. Cloudflare Tunnel is not used for worker traffic.
 
 ## Deployment layout
 
@@ -12,13 +21,26 @@ The production gateway runs as one Node.js process on the Ariobarin VPS. It bind
 /var/lib/veronica
 ```
 
-The `veronica` system user runs the gateway. `/etc/veronica.env` is owned by root with mode `600`. The deployment workflow creates a random production token only when that file does not exist.
+The `veronica` system user runs the gateway. `/etc/veronica.env` is owned by root with mode `600`. The deployment workflow creates a random production token only when that file does not exist. Subsequent deploys preserve the token while enforcing the approved listener and host configuration.
+
+## Public routing
+
+The existing Relay Caddy process keeps its layer 4 SNI routes for other services. The Veronica SNI route forwards TLS to a loopback-only HTTPS listener in the same Caddy process, which proxies only `/mcp` and `/healthz` to the gateway.
+
+`veronica.ariobarin.com` must have a DNS-only A record for the Relay VPS public address before deployment. Caddy obtains and renews the certificate. Do not enable Cloudflare proxying unless the certificate strategy is deliberately revised and validated.
+
+An interrupted earlier setup may have installed the `cloudflared` package. An installed package alone is not an active tunnel. Before changing it, inspect its service, configuration, origin certificate, and tunnel credentials. The verified Relay state had no service unit, configuration, origin certificate, or tunnel credentials, so the package is retained but unused.
 
 ## Deploy
 
-Run the `Deploy Veronica` workflow in `ariobarin/relay`. Choose the Veronica Git ref, then enable tunnel configuration only when the named Cloudflare Tunnel has not been configured yet. The workflow builds and checks Veronica, installs the pinned Node.js runtime, uploads a release, changes the `current` symlink atomically, restarts the service, and rolls back if local health verification fails.
+Run the `Deploy Veronica` workflow in `ariobarin/relay`.
 
-The first tunnel configuration runs `cloudflared tunnel login`. Complete the browser authentication without copying Cloudflare credentials into chat or workflow inputs. The workflow then creates the `veronica` tunnel, adds the DNS route, installs its configuration, and starts `cloudflared`.
+1. Use `inspect` to capture the current WireGuard, Caddy, gateway, and cloudflared state.
+2. Use `validate` to validate the repository Caddyfile with the VPS Caddy binary without installing it.
+3. Create the DNS-only A record after validation succeeds.
+4. Use `deploy` with the intended Veronica Git ref.
+
+The workflow builds and checks Veronica, installs the pinned Node.js runtime, uploads a release, changes the `current` symlink atomically, restarts the gateway, installs the validated Caddy configuration, and reloads Caddy. It refuses to replace a live Caddyfile that does not match repository history. Gateway or Caddy health failures trigger rollback.
 
 The workflow can be rerun for the same commit. It preserves `/etc/veronica.env`, reuses the release, and keeps the five newest releases.
 
@@ -34,16 +56,16 @@ Store it in a protected local environment or secret store. Do not place it in Gi
 
 ## Connect a workstation
 
-Install the same Veronica revision, set `VERONICA_TOKEN` from the protected local source, and expose the smallest useful directory:
+Connect the workstation to the existing Relay WireGuard network first. Install the same Veronica revision, set `VERONICA_TOKEN` from the protected local source, and expose the smallest useful directory:
 
 ```powershell
 $env:VERONICA_TOKEN = "<production token from a protected source>"
 npm run dev -- expose "C:\Users\Administrator\Desktop\repos" `
   --name desktop `
-  --gateway "https://veronica.ariobarin.com"
+  --gateway "http://10.0.0.1:39100"
 ```
 
-Stopping this process removes the workstation connection.
+The worker uses WireGuard for every `/device/*` request. It must not use the public hostname. Stopping the process removes the workstation connection.
 
 ## Verify
 
@@ -51,10 +73,13 @@ On the VPS:
 
 ```bash
 systemctl is-active veronica
-systemctl is-active cloudflared
+systemctl is-active caddy
 curl --fail --silent --show-error http://127.0.0.1:39100/healthz
-ss -ltnp | grep '127.0.0.1:39100'
+curl --fail --silent --show-error http://10.0.0.1:39100/healthz
+ss -ltnp | grep ':39100'
 ```
+
+The listener output must include only `127.0.0.1:39100` and `10.0.0.1:39100`. It must not include `0.0.0.0:39100` or the VPS public address.
 
 From an external machine:
 
@@ -62,7 +87,7 @@ From an external machine:
 ./scripts/remote-health-check.sh
 ```
 
-An authenticated MCP smoke test must list the workstation, open a workspace, read and write a file, run a harmless command, and close the workspace.
+An authenticated MCP smoke test must list the workstation, open a workspace, read and write a disposable file, run a harmless command, close the workspace, and remove the disposable file. Run the full checklist in [deployment-acceptance.md](deployment-acceptance.md).
 
 ## Operate
 
@@ -76,7 +101,7 @@ Workers retry after connection errors and register again after the gateway loses
 
 Rotate the token by replacing `VERONICA_TOKEN` in `/etc/veronica.env`, restarting Veronica, and updating each authorized client. Verify that the old token receives `401` before considering rotation complete.
 
-Roll back by selecting a prior directory under `/opt/veronica/releases`, changing the `current` symlink atomically, restarting Veronica, and checking both local and public health. The Relay workflow performs this rollback automatically when a new release fails its local health check.
+Roll back by selecting a prior directory under `/opt/veronica/releases`, changing the `current` symlink atomically, restarting Veronica, and checking both private listener addresses plus public health. Restore the prior repository Caddyfile and reload Caddy if public routing changed. The Relay workflow performs these rollbacks automatically when a deployment fails verification.
 
 ## Security limits
 

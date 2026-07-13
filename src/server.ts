@@ -217,8 +217,15 @@ export function resolveAllowedHosts(): string[] | undefined {
   return hosts;
 }
 
+export function resolveListenHosts(): string[] {
+  const configured = process.env.HOSTS ?? process.env.HOST ?? "127.0.0.1";
+  const hosts = [...new Set(configured.split(",").map(host => host.trim()).filter(Boolean))];
+  if (hosts.length === 0) throw new Error("HOSTS must contain at least one address");
+  return hosts;
+}
+
 export function createGatewayApp(token: string, broker = new Broker()) {
-  const host = process.env.HOST ?? "127.0.0.1";
+  const host = resolveListenHosts()[0];
   const app = createMcpExpressApp({ host, allowedHosts: resolveAllowedHosts() });
   app.use(express.json({ limit: "2mb" }));
   app.use(requireToken(token));
@@ -295,13 +302,16 @@ export function startServer() {
     throw new Error("VERONICA_TOKEN must be set to a random value of at least 32 characters");
   }
 
-  const host = process.env.HOST ?? "127.0.0.1";
+  const hosts = resolveListenHosts();
   const port = Number.parseInt(process.env.PORT ?? "3000", 10);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid PORT: ${process.env.PORT}`);
 
-  return createGatewayApp(token).listen(port, host, () => {
-    console.error(`Veronica gateway listening on http://${host}:${port}`);
-  });
+  const app = createGatewayApp(token);
+  return hosts.map(host =>
+    app.listen(port, host, () => {
+      console.error(`Veronica gateway listening on http://${host}:${port}`);
+    })
+  );
 }
 
 export function isMainModule(
