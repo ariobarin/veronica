@@ -14,9 +14,19 @@ status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
   --header 'content-type: application/json' \
   --data '{}' \
   "${base_url}/device/register")"
-if [[ "$status" != "401" ]]; then
-  printf 'Expected unauthenticated device registration to return 401, got %s\n' "$status" >&2
+if [[ "$status" != "404" ]]; then
+  printf 'Expected the public device route to return 404, got %s\n' "$status" >&2
   exit 1
 fi
 
-printf 'Veronica health and authentication checks passed for %s\n' "$base_url"
+status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+  --request POST \
+  --header 'content-type: application/json' \
+  --data '{}' \
+  "${base_url}/mcp")"
+if [[ "$status" != "401" ]]; then
+  printf 'Expected unauthenticated MCP access to return 401, got %s\n' "$status" >&2
+  exit 1
+fi
+
+printf 'Veronica public routing and authentication checks passed for %s\n' "$base_url"

@@ -41,7 +41,7 @@ It exposes six MCP tools:
 - `run_command`
 - `close_workspace`
 
-The worker polls the gateway over ordinary HTTPS. There are no inbound connections to the exposed computer, persistent terminals, background processes, databases, or device certificates yet.
+The worker polls the gateway over an operator-controlled private network. There are no inbound connections to the exposed computer, persistent terminals, background processes, databases, or device certificates yet.
 
 ## Run locally
 
@@ -81,7 +81,7 @@ Send the same token as an HTTP bearer token. In a deployed setup, put the gatewa
 
 ## Deploy
 
-The production layout uses a systemd service bound to loopback and Cloudflare Tunnel for public HTTPS ingress. See [docs/deployment.md](docs/deployment.md) for deployment, verification, token handling, rollback, and security limits.
+The production layout binds the gateway to VPS loopback and WireGuard. Existing Relay Caddy infrastructure publishes only the external MCP and health routes over HTTPS. Workstations use the WireGuard address directly, and worker routes are not public. See [docs/deployment.md](docs/deployment.md) for deployment, verification, token handling, rollback, and security limits.
 
 ## Example agent flow
 
