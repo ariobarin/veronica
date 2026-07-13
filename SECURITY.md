@@ -11,12 +11,12 @@ Veronica is experimental. Do not treat the current implementation as a hardened 
 The prototype assumes:
 
 - One trusted operator
-- Trusted agent harnesses with the gateway token
+- Trusted users authenticated by the configured OAuth identity provider
 - Trusted computers running the worker
 - TLS termination in front of any internet-facing gateway
 - No hostile multi-tenant use
 
-The shared bearer token protects both MCP and worker endpoints. Use a random value of at least 32 characters and rotate it if exposed.
+OAuth protects the public MCP endpoint. The gateway verifies access token signature, issuer, audience, expiry, and required scopes. A separate random bearer token protects private worker endpoints. Use at least 32 random characters for the device token and rotate it if exposed.
 
 ## Safe deployment guidance
 
@@ -27,12 +27,14 @@ The shared bearer token protects both MCP and worker endpoints. Use a random val
 - Expose the smallest useful directory.
 - Run the worker under a dedicated operating system account when practical.
 - Use a container or VM for untrusted repositories or unattended work.
-- Do not pass the token on a command line in shared environments. Prefer `VERONICA_TOKEN`.
+- Do not pass the device token on a command line in shared environments. Prefer `VERONICA_TOKEN` on workers and `VERONICA_DEVICE_TOKEN` on the gateway.
 - Do not expose a worker that has credentials the agent should not be able to use.
 
 ## Implemented controls
 
-- All non-health endpoints require a bearer token.
+- `/mcp` requires an OAuth access token with `veronica:read` and `veronica:write` scopes.
+- `/device/*` requires the private device bearer token.
+- The gateway publishes OAuth protected resource metadata and returns a standards-based bearer challenge.
 - A worker exposes one canonical directory root.
 - File operations reject absolute paths and lexical parent escapes.
 - Existing paths and writable ancestors are resolved to detect symlink escapes.
@@ -43,8 +45,9 @@ The shared bearer token protects both MCP and worker endpoints. Use a random val
 
 ## Known limitations
 
-- One shared token is used instead of user and per-device identities.
-- There is no OAuth, device enrollment, certificate rotation, or revocation list.
+- One shared token is still used for all workers instead of per-device identities.
+- OAuth authorization depends on the identity provider's user, client, consent, and revocation controls.
+- There is no device enrollment, certificate rotation, or device revocation list.
 - There is no local approval prompt or durable audit log.
 - Shell commands inherit the worker's environment.
 - Shell execution is not isolated from the rest of the user account.

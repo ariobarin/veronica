@@ -5,11 +5,11 @@
 ```text
 agent harness
     |
-    | MCP over HTTP
+    | OAuth-authenticated MCP over HTTPS
     v
 Veronica gateway
     |
-    | authenticated HTTPS polling
+    | authenticated HTTP polling over WireGuard
     v
 veronica expose <directory>
     |
@@ -34,6 +34,8 @@ GET  /healthz
 ```
 
 A restart forgets all devices, jobs, and workspaces. Workers reconnect automatically.
+
+Public MCP clients and private workers have separate authentication boundaries. MCP clients use OAuth access tokens issued for the Veronica resource with `veronica:read` and `veronica:write` scopes. Workers use a random device bearer token only across the operator-controlled WireGuard network. The shared device token is never accepted on `/mcp`.
 
 ### Worker
 

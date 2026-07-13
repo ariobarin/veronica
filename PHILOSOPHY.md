@@ -65,4 +65,4 @@ Before adding a feature, ask:
 
 ## Current deliberate limitations
 
-The prototype uses one shared bearer token, in-memory routing, long polling, one exposed root per worker, completed command output, and no sandbox. These are not claims about the final architecture. They are the smallest choices that test whether the core interaction is useful.
+The prototype uses OAuth for MCP clients, one shared device token for workers, in-memory routing, long polling, one exposed root per worker, completed command output, and no sandbox. These are not claims about the final architecture. They are the smallest choices that test whether the core interaction is useful.
