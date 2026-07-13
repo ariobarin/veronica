@@ -28,6 +28,8 @@ Create an OAuth API or protected resource with:
 
 - Resource and JWT audience: `https://veronica.example.com/`
 - Permission: `veronica:access`
+
+For an existing deployment, add and grant this permission before upgrading the gateway. Tokens containing only the earlier read and write permissions will not authorize the new revision.
 - Access tokens containing the permissions in either `scope` or `permissions`
 - The exact issuer URL and a public JWKS endpoint
 - Authorization code with PKCE for public clients

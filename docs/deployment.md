@@ -36,6 +36,8 @@ Keep the public origin and OAuth resource distinct where the trailing slash matt
 
 Create one API or protected resource with the permission `veronica:access`.
 
+Existing deployments that issued only `veronica:read` and `veronica:write` must create and grant `veronica:access` before deploying this revision. Existing access tokens are not rewritten; obtain a fresh token after updating the client grant and user authorization.
+
 Veronica accepts access tokens that meet all of these conditions:
 
 - JWT signed with RS256
