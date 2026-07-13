@@ -45,7 +45,7 @@ Public MCP clients and private workers have separate authentication boundaries. 
 
 ### Device
 
-A device is one running worker process with a unique name. The prototype assumes one connected device per name.
+A device is one running worker process with a unique name and a non-sensitive exposed-root label. The prototype assumes one connected device per name. Offline records are removed after a bounded retention window.
 
 ### Workspace
 
@@ -57,7 +57,7 @@ selected device id
 path relative to the exposed root
 ```
 
-Opening a workspace asks the worker to verify that the directory exists. Every later operation revalidates the workspace path on the worker.
+Opening a workspace asks the worker to verify that the directory exists. When the caller omits a device, the gateway selects it only if exactly one worker is online. Every later operation revalidates the workspace path on the worker.
 
 ### Job
 

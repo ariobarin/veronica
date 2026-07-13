@@ -4,8 +4,8 @@ import test from "node:test";
 import { Broker } from "../src/broker.js";
 import { VeronicaError } from "../src/protocol.js";
 
-async function openWorkspace(broker: Broker, deviceId: string) {
-  const opening = broker.openWorkspace("desktop", "repo");
+async function openWorkspace(broker: Broker, deviceId: string, deviceName: string | undefined = "desktop") {
+  const opening = broker.openWorkspace(deviceName, "repo");
   const openJob = await broker.pollDevice(deviceId, 0);
   assert.equal(openJob?.request.type, "open_workspace");
   assert.equal(broker.completeJob(deviceId, openJob!.id, { ok: true, value: { path: "repo" } }), true);
@@ -14,8 +14,17 @@ async function openWorkspace(broker: Broker, deviceId: string) {
 
 test("broker routes workspace jobs to one named device", async () => {
   const broker = new Broker();
-  const deviceId = broker.registerDevice("desktop", "linux/x64");
-  const workspace = await openWorkspace(broker, deviceId);
+  const deviceId = broker.registerDevice("desktop", "linux/x64", "project");
+  const workspace = await openWorkspace(broker, deviceId, undefined);
+
+  assert.deepEqual(broker.listDevices()[0], {
+    id: deviceId,
+    name: "desktop",
+    platform: "linux/x64",
+    rootLabel: "project",
+    online: true,
+    lastSeenAt: broker.listDevices()[0]!.lastSeenAt
+  });
 
   const reading = broker.executeInWorkspace(workspace.id, workspacePath => ({
     type: "read_file",
@@ -35,6 +44,32 @@ test("broker routes workspace jobs to one named device", async () => {
   });
   assert.equal(broker.closeWorkspace(workspace.id), true);
   assert.equal(broker.closeWorkspace(workspace.id), false);
+});
+
+test("broker requires a device name only when selection is ambiguous", async () => {
+  const broker = new Broker();
+  broker.registerDevice("desktop", "linux/x64", "first");
+  broker.registerDevice("laptop", "darwin/arm64", "second");
+
+  await assert.rejects(
+    broker.openWorkspace(undefined, "."),
+    error =>
+      error instanceof VeronicaError &&
+      error.code === "conflict" &&
+      error.message === "Multiple Veronica devices are online: desktop, laptop"
+  );
+});
+
+test("broker prunes stale device records after the retention window", () => {
+  let now = 1_000;
+  const broker = new Broker({
+    now: () => now,
+    deviceOnlineWindowMs: 100,
+    deviceRetentionMs: 500
+  });
+  broker.registerDevice("desktop", "linux/x64", "project");
+  now += 501;
+  assert.deepEqual(broker.listDevices(), []);
 });
 
 test("broker removes queued jobs when their caller times out", async () => {

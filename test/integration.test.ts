@@ -53,7 +53,14 @@ test("gateway routes real workspace operations through a polling worker", async 
 
   const controller = new AbortController();
   const gateway = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
-  const worker = runWorker({ root, name: "integration-worker", gateway, token, signal: controller.signal });
+  const worker = runWorker({
+    root,
+    rootLabel: "integration-root",
+    name: "integration-worker",
+    gateway,
+    token,
+    signal: controller.signal
+  });
 
   t.after(async () => {
     controller.abort();
@@ -63,7 +70,7 @@ test("gateway routes real workspace operations through a polling worker", async 
   });
 
   await waitFor(() => broker.listDevices().some(device => device.name === "integration-worker" && device.online));
-  const workspace = await broker.openWorkspace("integration-worker", ".");
+  const workspace = await broker.openWorkspace(undefined, ".");
 
   const read = await broker.executeInWorkspace(workspace.id, workspacePath => ({
     type: "read_file",

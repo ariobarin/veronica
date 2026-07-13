@@ -27,7 +27,7 @@ OAuth protects the public MCP endpoint. The gateway verifies access token signat
 - Expose the smallest useful directory.
 - Run the worker under a dedicated operating system account when practical.
 - Use a container or VM for untrusted repositories or unattended work.
-- Do not pass the device token on a command line in shared environments. Prefer `VERONICA_TOKEN` on workers and `VERONICA_DEVICE_TOKEN` on the gateway.
+- Worker tokens are accepted only through `VERONICA_TOKEN`; gateway tokens use `VERONICA_DEVICE_TOKEN`.
 - Do not expose a worker that has credentials the agent should not be able to use.
 
 ## Implemented controls
@@ -35,7 +35,7 @@ OAuth protects the public MCP endpoint. The gateway verifies access token signat
 - `/mcp` requires an OAuth access token with `veronica:read` and `veronica:write` scopes.
 - `/device/*` requires the private device bearer token.
 - The gateway publishes OAuth protected resource metadata and returns a standards-based bearer challenge.
-- A worker exposes one canonical directory root.
+- A worker exposes one canonical directory root. With no path, the CLI selects the Git worktree root and refuses home or filesystem roots without explicit confirmation.
 - File operations reject absolute paths and lexical parent escapes.
 - Existing paths and writable ancestors are resolved to detect symlink escapes.
 - Workspaces must be verified by the worker before use.

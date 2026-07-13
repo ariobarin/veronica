@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import os from "node:os";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -431,6 +430,7 @@ function errorMessage(error: unknown): string {
 
 export type WorkerOptions = {
   root: string;
+  rootLabel: string;
   name: string;
   gateway: string;
   token: string;
@@ -441,7 +441,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
   const root = await canonicalizeRoot(options.root);
   let deviceId: string | undefined;
 
-  console.error(`Veronica exposing ${root} as ${options.name}`);
+  console.error(`Veronica exposing ${root} as ${options.name} (${options.rootLabel})`);
 
   while (!options.signal?.aborted) {
     try {
@@ -451,7 +451,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
             options.gateway,
             "/device/register",
             options.token,
-            { name: options.name, platform: `${process.platform}/${process.arch}`, hostname: os.hostname() },
+            { name: options.name, platform: `${process.platform}/${process.arch}`, rootLabel: options.rootLabel },
             options.signal
           )
         );
