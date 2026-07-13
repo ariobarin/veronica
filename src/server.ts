@@ -1,4 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from "express";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -303,5 +304,13 @@ export function startServer() {
   });
 }
 
-const entrypoint = process.argv[1] ? path.resolve(process.argv[1]) : "";
-if (entrypoint === fileURLToPath(import.meta.url)) startServer();
+export function isMainModule(
+  entrypoint: string | undefined,
+  moduleUrl: string,
+  canonicalize: (value: string) => string = realpathSync
+): boolean {
+  if (!entrypoint) return false;
+  return canonicalize(path.resolve(entrypoint)) === canonicalize(fileURLToPath(moduleUrl));
+}
+
+if (isMainModule(process.argv[1], import.meta.url)) startServer();
