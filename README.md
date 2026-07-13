@@ -79,6 +79,10 @@ http://127.0.0.1:3000/mcp
 
 Send the same token as an HTTP bearer token. In a deployed setup, put the gateway behind HTTPS and keep the Node process bound to a private or loopback interface.
 
+## Deploy
+
+The production layout uses a systemd service bound to loopback and Cloudflare Tunnel for public HTTPS ingress. See [docs/deployment.md](docs/deployment.md) for deployment, verification, token handling, rollback, and security limits.
+
 ## Example agent flow
 
 ```text

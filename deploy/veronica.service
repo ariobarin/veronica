@@ -1,0 +1,23 @@
+[Unit]
+Description=Veronica gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=veronica
+Group=veronica
+WorkingDirectory=/opt/veronica/current
+EnvironmentFile=/etc/veronica.env
+ExecStart=/usr/local/bin/node /opt/veronica/current/dist/server.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/veronica
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
