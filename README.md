@@ -1,128 +1,176 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/veronica-mark-inverse.svg">
-    <img src="docs/assets/veronica-mark.svg" alt="Veronica mark" width="112" height="112">
-  </picture>
-</p>
-
-<h1 align="center">Veronica</h1>
+# Veronica
 
 Veronica lets an agent use a directory on one of your computers as a remote coding workspace.
 
 ```text
-agent -> MCP gateway -> exposed computer -> files and shell
+agent -> OAuth protected MCP gateway -> private worker connection -> files and shell
 ```
 
-Veronica is deliberately not another agent. It is the controlled handoff between a harness that decides and a machine that executes.
+The gateway exposes six MCP tools: `list_devices`, `open_workspace`, `read_file`, `write_file`, `run_command`, and `close_workspace`. The worker makes outbound requests only and exposes one directory chosen by its operator.
 
-On a computer you want to expose:
+> Veronica is an early prototype. Commands run with the permissions and environment of the user who starts the worker. Read [SECURITY.md](SECURITY.md) before exposing a workstation.
 
-```bash
-veronica expose ~/code --name desktop
-```
+## Quickstart
 
-The agent can then discover `desktop`, open a workspace below `~/code`, read and write files, and run shell commands there.
+This quickstart uses one gateway host, one worker, a private network between them, and an HTTPS reverse proxy for MCP clients. Replace every `example.com`, address, path, and device name with values from your environment.
 
-> Veronica is an early prototype. It runs commands with the permissions and environment of the user who starts it. Read [SECURITY.md](SECURITY.md) before connecting it to the public internet.
+### 1. Prepare the required services
 
-## Why Veronica exists
+You need:
 
-An agent harness already owns the model, conversation, planning, retries, and tool loop. Veronica should not duplicate that machinery. It supplies only the missing execution bridge to computers the user explicitly exposes.
+- Node.js 20 or newer on the gateway and worker
+- An OAuth identity provider that issues RS256 JWT access tokens
+- A Linux gateway host reachable by the worker through WireGuard or another operator controlled private network
+- A public DNS name with HTTPS for remote MCP clients
+- Git and a way to generate 32 random bytes, such as OpenSSL
 
-The gateway is intentionally small. It authenticates requests, tracks connected devices in memory, and routes jobs. The exposed computer performs all filesystem and process work.
+Create an OAuth API or protected resource with:
 
-See [PHILOSOPHY.md](PHILOSOPHY.md) for the durable design rules and [docs/architecture.md](docs/architecture.md) for the current shape.
+- Resource and audience: `https://veronica.example.com/`
+- Permissions: `veronica:read` and `veronica:write`
+- Access tokens containing the permissions in either `scope` or `permissions`
+- The exact issuer URL and a public JWKS endpoint
+- Authorization code with PKCE for public clients
 
-### Character
+The access token must also contain `exp` and one client identifier in `client_id`, `azp`, or `sub`. If your MCP client uses dynamic registration or Client ID Metadata Documents, enable the matching feature in the identity provider.
 
-Veronica should feel like a trusted operator, not a chatbot: calm, direct, exact about boundaries, and absent until needed. The agent thinks; Veronica connects.
+### 2. Install Veronica
 
-The project avoids theatrical AI language and vague security claims. It names what is exposed, where work runs, and which component owns each decision. See the [brand guide](docs/brand.md) for the visual system and writing voice.
-
-## Current prototype
-
-The first version has one CLI command:
-
-```bash
-veronica expose [path] --name <device>
-```
-
-It exposes six MCP tools:
-
-- `list_devices`
-- `open_workspace`
-- `read_file`
-- `write_file`
-- `run_command`
-- `close_workspace`
-
-The worker polls the gateway over an operator-controlled private network. There are no inbound connections to the exposed computer, persistent terminals, background processes, databases, or device certificates yet.
-
-## Run locally
-
-Requirements:
-
-- Node.js 20 or newer
-- A random device token of at least 32 characters
-- An OAuth 2.1 identity provider for MCP clients
-
-Install and build:
+Run on both the gateway and worker:
 
 ```bash
-npm install --ignore-scripts
+git clone https://github.com/ariobarin/veronica.git
+cd veronica
+npm ci --ignore-scripts
 npm run build
+npm test
 ```
 
-Start the gateway:
+The package is currently private to the repository, so installation starts from a Git checkout rather than a registry package.
+
+### 3. Start the gateway
+
+Generate one worker token and protect it like a password:
 
 ```bash
 export VERONICA_DEVICE_TOKEN="$(openssl rand -hex 32)"
-export VERONICA_OAUTH_ISSUER="https://your-tenant.example.com/"
-export VERONICA_OAUTH_AUDIENCE="https://veronica.example.com/"
-export VERONICA_OAUTH_RESOURCE="https://veronica.example.com/"
-npm run dev:gateway
 ```
 
-In another terminal, expose a directory:
+Set the public OAuth identity and the private listener addresses:
 
 ```bash
-export VERONICA_TOKEN="the-same-device-token"
-npm run dev -- expose ~/code --name desktop
+export VERONICA_OAUTH_ISSUER="https://identity.example.com/"
+export VERONICA_OAUTH_AUDIENCE="https://veronica.example.com/"
+export VERONICA_OAUTH_RESOURCE="https://veronica.example.com/"
+export HOSTS="127.0.0.1,10.20.0.1"
+export PORT="39100"
+export VERONICA_ALLOWED_HOSTS="veronica.example.com,10.20.0.1,127.0.0.1,localhost"
+npm start
 ```
 
-The MCP endpoint is:
+`VERONICA_OAUTH_AUDIENCE` must exactly match `VERONICA_OAUTH_RESOURCE`. Veronica obtains signing keys from `<issuer>/.well-known/jwks.json` by default. Set `VERONICA_OAUTH_JWKS_URI` when your provider publishes keys elsewhere.
+
+Confirm both private listeners:
+
+```bash
+curl --fail http://127.0.0.1:39100/healthz
+curl --fail http://10.20.0.1:39100/healthz
+ss -ltnp | grep ':39100'
+```
+
+The output must not contain `0.0.0.0:39100`, `[::]:39100`, or the gateway public address.
+
+### 4. Publish only the MCP surface
+
+Configure your HTTPS reverse proxy so `https://veronica.example.com` forwards these paths to `http://127.0.0.1:39100`:
+
+- `/mcp`
+- `/healthz`
+- `/.well-known/oauth-protected-resource`
+
+Return `404` for `/device/*`. Do not open, forward, proxy, or create a public DNAT rule for port `39100`. Worker traffic belongs on the private network.
+
+Run the public checks after HTTPS is active:
+
+```bash
+./scripts/remote-health-check.sh https://veronica.example.com
+```
+
+See [docs/deployment.md](docs/deployment.md) for a provider neutral reverse proxy, service, firewall, upgrade, and rollback guide.
+
+### 5. Connect a worker
+
+Copy the same device token to the worker through a protected secret channel. Never put it in Git, chat, shell history, or CI logs.
+
+On Linux or macOS:
+
+```bash
+export VERONICA_TOKEN="<worker token>"
+npm run dev -- expose "$HOME/code" \
+  --name laptop \
+  --gateway "http://10.20.0.1:39100"
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:VERONICA_TOKEN = "<worker token>"
+npm run dev -- expose "C:\Users\you\code" `
+  --name laptop `
+  --gateway "http://10.20.0.1:39100"
+```
+
+Expose the smallest useful root. The worker must use the private gateway address, not the public hostname.
+
+### 6. Connect an MCP client
+
+Add this remote MCP server to a client that supports OAuth:
 
 ```text
-http://127.0.0.1:3000/mcp
+https://veronica.example.com/mcp
 ```
 
-MCP clients discover the OAuth authorization server at `/.well-known/oauth-protected-resource` and send a scoped access token. The shared device token is accepted only on `/device/*`. In a deployed setup, put the gateway behind HTTPS and keep the Node process bound to a private or loopback interface.
-
-## Deploy
-
-The production layout binds the gateway to VPS loopback and WireGuard. Existing Relay Caddy infrastructure publishes only the external MCP and health routes over HTTPS. Workstations use the WireGuard address directly, and worker routes are not public. See [docs/deployment.md](docs/deployment.md) for deployment, verification, token handling, rollback, and security limits.
-
-## Example agent flow
+Complete login and consent with the identity provider. Then call:
 
 ```text
 list_devices
-open_workspace(device="desktop", path="relay")
+open_workspace(device="laptop", path="project")
 read_file(workspace_id="...", path="README.md")
 run_command(workspace_id="...", command="git status")
 close_workspace(workspace_id="...")
 ```
 
-A workspace is pinned to one device. All paths are relative to that workspace and are checked again on the exposed computer.
+If tool discovery returns `401`, inspect the access token issuer, audience, expiry, and permissions. If the worker does not appear, test private connectivity to the gateway and confirm both processes use the same device token.
+
+### 7. Verify the security boundary
+
+Before relying on the deployment, complete [docs/deployment-acceptance.md](docs/deployment-acceptance.md). At minimum verify:
+
+- Public HTTPS serves MCP and protected resource metadata.
+- Unauthenticated MCP requests return `401` with the required scopes and metadata URL.
+- Public `/device/*` returns `404`.
+- Public port `39100` is closed.
+- The worker reaches port `39100` over the private network.
+- An authenticated MCP client can list the worker and complete a disposable workspace test.
+
+## How it works
+
+The agent harness owns the model, conversation, planning, retries, and tool loop. Veronica only supplies the execution bridge. The gateway authenticates MCP requests, tracks devices in memory, and routes jobs. Workers poll the gateway and enforce workspace and path boundaries on the exposed computer.
+
+There are no inbound connections to workers, persistent terminals, background processes, databases, or per-device certificates yet. Gateway restarts forget current devices and workspaces, and running workers register again automatically.
+
+See [PHILOSOPHY.md](PHILOSOPHY.md) for the durable design rules and [docs/architecture.md](docs/architecture.md) for the component model.
 
 ## Development
 
 ```bash
+npm ci --ignore-scripts
 npm run build
 npm test
 npm run check
 ```
 
-Changes should stay small and update the design documents when they change a boundary or assumption. Read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before making structural changes.
+Read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before making structural changes. Maintainer specific deployment notes belong in a separate operator file, not in this quickstart. The current Ariobarin environment is documented in [docs/deployment-ariobarin.md](docs/deployment-ariobarin.md).
 
 ## License
 
