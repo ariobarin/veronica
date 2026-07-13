@@ -192,4 +192,4 @@ Revoke MCP access in the identity provider. Do not expose access tokens, worker 
 
 The prototype uses OAuth for MCP clients and one shared bearer token for workers. It has no database, rate limiting, per-device identity, local approval prompt, or durable audit log. Shell commands run with the worker account permissions and environment. Expose narrow roots and use a container or virtual machine for untrusted repositories.
 
-Environment specific procedures should live in a separate operator file. See [deployment-ariobarin.md](deployment-ariobarin.md) for the maintainer deployment without treating its values as defaults.
+Environment-specific procedures should live with the private infrastructure that owns them, not in this public runtime repository.
