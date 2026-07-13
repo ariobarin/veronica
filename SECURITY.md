@@ -40,6 +40,8 @@ OAuth protects the public MCP endpoint. The gateway verifies access token signat
 - Existing paths and writable ancestors are resolved to detect symlink escapes.
 - Workspaces must be verified by the worker before use.
 - Text file and captured command output are limited to 1 MiB.
+- File reads return a SHA-256 revision, and writes may require that revision before atomic replacement.
+- Queued jobs carry an expiry and are removed when their caller times out.
 - Command duration is limited by the requested timeout.
 - Device, workspace, and job state is held only in memory.
 
@@ -52,7 +54,9 @@ OAuth protects the public MCP endpoint. The gateway verifies access token signat
 - Shell commands inherit the worker's environment.
 - Shell execution is not isolated from the rest of the user account.
 - A timed-out command receives a basic child-process kill, not a guaranteed process-tree kill on every platform.
+- Gateway expiry prevents queued work from starting late, but it does not cancel a command that already started.
 - MCP disconnects do not yet cancel worker jobs.
+- Revision checks detect stale content observed before replacement but are not a cross-process file-locking system.
 - Command output is not streamed.
 - The gateway has no persistence or multi-instance coordination.
 - Denial-of-service protection and rate limiting are not implemented.

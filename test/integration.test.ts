@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -8,6 +9,10 @@ import { Broker } from "../src/broker.js";
 import { resolveOAuthConfig } from "../src/auth.js";
 import { createGatewayApp } from "../src/server.js";
 import { runWorker } from "../src/worker.js";
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -65,7 +70,7 @@ test("gateway routes real workspace operations through a polling worker", async 
     workspace: workspacePath,
     path: "README.md"
   }));
-  assert.deepEqual(read, { ok: true, value: { content: "hello" } });
+  assert.deepEqual(read, { ok: true, value: { content: "hello", sha256: sha256("hello") } });
 
   const write = await broker.executeInWorkspace(workspace.id, workspacePath => ({
     type: "write_file",
@@ -73,7 +78,10 @@ test("gateway routes real workspace operations through a polling worker", async 
     path: "notes/result.txt",
     content: "written through the gateway"
   }));
-  assert.deepEqual(write, { ok: true, value: { bytesWritten: 27 } });
+  assert.deepEqual(write, {
+    ok: true,
+    value: { bytesWritten: 27, sha256: sha256("written through the gateway") }
+  });
 
   const command = await broker.executeInWorkspace(workspace.id, workspacePath => ({
     type: "run_command",

@@ -18,23 +18,23 @@ import {
 } from "./auth.js";
 import { Broker } from "./broker.js";
 import {
+  commandSchema,
+  commandValueSchema,
   DEFAULT_COMMAND_TIMEOUT_SECONDS,
-  MAX_COMMAND_TIMEOUT_SECONDS,
   pollDeviceSchema,
+  readFileValueSchema,
   registerDeviceSchema,
-  submitResultSchema
+  relativePathSchema,
+  sha256Schema,
+  submitResultSchema,
+  textContentSchema,
+  timeoutSecondsSchema,
+  toWorkerError,
+  VeronicaError,
+  workerErrorSchema,
+  writeFileValueSchema
 } from "./protocol.js";
 
-const readValueSchema = z.object({ content: z.string() });
-const writeValueSchema = z.object({ bytesWritten: z.number().int().nonnegative() });
-const commandValueSchema = z.object({
-  exitCode: z.number().int().nullable(),
-  signal: z.string().nullable(),
-  stdout: z.string(),
-  stderr: z.string(),
-  truncated: z.boolean(),
-  timedOut: z.boolean()
-});
 const oauthSecuritySchemes = [{ type: "oauth2", scopes: ["veronica:read", "veronica:write"] }] as const;
 const oauthToolMeta = { securitySchemes: oauthSecuritySchemes };
 
@@ -46,10 +46,12 @@ function jsonResult(value: Record<string, unknown>) {
 }
 
 function errorResult(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const parsed = workerErrorSchema.safeParse(error);
+  const detail = parsed.success ? parsed.data : toWorkerError(error);
   return {
     isError: true,
-    content: [{ type: "text" as const, text: message }]
+    structuredContent: detail,
+    content: [{ type: "text" as const, text: detail.message }]
   };
 }
 
@@ -59,7 +61,7 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
     {
       instructions: [
         "Veronica routes a small set of coding operations to explicitly exposed local workspaces.",
-        "Call list_devices, then open_workspace, then use the returned workspace_id.",
+        "Call list_devices, then open_workspace, then use the returned workspace_id."
       ].join(" ")
     }
   );
@@ -70,7 +72,7 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
       title: "List Veronica devices",
       description: "List computers currently known to the Veronica gateway.",
       inputSchema: {},
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, openWorldHint: false },
       _meta: oauthToolMeta
     },
     async () => jsonResult({ devices: broker.listDevices() })
@@ -83,8 +85,9 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
       description: "Open a directory below a named device's exposed root.",
       inputSchema: {
         device: z.string().min(1),
-        path: z.string().min(1).default(".")
+        path: relativePathSchema.default(".")
       },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMeta
     },
     async ({ device, path: workspacePath }) => {
@@ -105,12 +108,12 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
     "read_file",
     {
       title: "Read workspace file",
-      description: "Read a UTF-8 text file inside an open Veronica workspace.",
+      description: "Read a UTF-8 text file and its SHA-256 revision inside an open Veronica workspace.",
       inputSchema: {
         workspace_id: z.string().uuid(),
-        path: z.string().min(1)
+        path: relativePathSchema
       },
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, openWorldHint: false },
       _meta: oauthToolMeta
     },
     async ({ workspace_id: workspaceId, path: filePath }) => {
@@ -121,8 +124,7 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
           path: filePath
         }));
         if (!result.ok) return errorResult(result.error);
-        const value = readValueSchema.parse(result.value);
-        return jsonResult(value);
+        return jsonResult(readFileValueSchema.parse(result.value));
       } catch (error) {
         return errorResult(error);
       }
@@ -133,25 +135,32 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
     "write_file",
     {
       title: "Write workspace file",
-      description: "Replace a UTF-8 text file inside an open Veronica workspace.",
+      description: "Atomically replace a UTF-8 text file, optionally only at an expected SHA-256 revision.",
       inputSchema: {
         workspace_id: z.string().uuid(),
-        path: z.string().min(1),
-        content: z.string()
+        path: relativePathSchema,
+        content: textContentSchema,
+        expected_sha256: sha256Schema.optional()
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false
+      },
       _meta: oauthToolMeta
     },
-    async ({ workspace_id: workspaceId, path: filePath, content }) => {
+    async ({ workspace_id: workspaceId, path: filePath, content, expected_sha256: expectedSha256 }) => {
       try {
         const result = await broker.executeInWorkspace(workspaceId, workspace => ({
           type: "write_file",
           workspace,
           path: filePath,
-          content
+          content,
+          expectedSha256
         }));
         if (!result.ok) return errorResult(result.error);
-        return jsonResult(writeValueSchema.parse(result.value));
+        return jsonResult(writeFileValueSchema.parse(result.value));
       } catch (error) {
         return errorResult(error);
       }
@@ -165,8 +174,14 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
       description: "Run one shell command in an open Veronica workspace and return its completed output.",
       inputSchema: {
         workspace_id: z.string().uuid(),
-        command: z.string().min(1),
-        timeout_seconds: z.number().int().min(1).max(MAX_COMMAND_TIMEOUT_SECONDS).default(DEFAULT_COMMAND_TIMEOUT_SECONDS)
+        command: commandSchema,
+        timeout_seconds: timeoutSecondsSchema.default(DEFAULT_COMMAND_TIMEOUT_SECONDS)
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true
       },
       _meta: oauthToolMeta
     },
@@ -196,7 +211,7 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
       title: "Close Veronica workspace",
       description: "Forget an open workspace lease.",
       inputSchema: { workspace_id: z.string().uuid() },
-      annotations: { idempotentHint: true },
+      annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: oauthToolMeta
     },
     async ({ workspace_id: workspaceId }) => jsonResult({ closed: broker.closeWorkspace(workspaceId) })
@@ -206,9 +221,11 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
 }
 
 function statusForError(error: unknown): number {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("Unknown device")) return 404;
-  if (message.includes("already connected") || message.includes("active poll")) return 409;
+  if (!(error instanceof VeronicaError)) return 400;
+  if (error.code === "not_found") return 404;
+  if (error.code === "conflict") return 409;
+  if (error.code === "unavailable") return 503;
+  if (error.code === "timeout" || error.code === "expired") return 504;
   return 400;
 }
 
@@ -250,7 +267,7 @@ export function createGatewayApp(auth: GatewayAuthOptions, broker = new Broker()
       const deviceId = broker.registerDevice(input.name, input.platform);
       res.status(201).json({ deviceId });
     } catch (error) {
-      res.status(statusForError(error)).json({ error: error instanceof Error ? error.message : String(error) });
+      res.status(statusForError(error)).json({ error: toWorkerError(error) });
     }
   });
 
@@ -260,17 +277,17 @@ export function createGatewayApp(auth: GatewayAuthOptions, broker = new Broker()
       const job = await broker.pollDevice(input.deviceId, input.waitMs);
       res.json({ job });
     } catch (error) {
-      res.status(statusForError(error)).json({ error: error instanceof Error ? error.message : String(error) });
+      res.status(statusForError(error)).json({ error: toWorkerError(error) });
     }
   });
 
   app.post("/device/result", deviceAuth, (req, res) => {
     try {
       const input = submitResultSchema.parse(req.body);
-      broker.completeJob(input.deviceId, input.jobId, input.result);
-      res.json({ ok: true });
+      const accepted = broker.completeJob(input.deviceId, input.jobId, input.result);
+      res.json({ accepted });
     } catch (error) {
-      res.status(statusForError(error)).json({ error: error instanceof Error ? error.message : String(error) });
+      res.status(statusForError(error)).json({ error: toWorkerError(error) });
     }
   });
 
