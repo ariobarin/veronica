@@ -60,7 +60,6 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
       instructions: [
         "Veronica routes a small set of coding operations to explicitly exposed local workspaces.",
         "Call list_devices, then open_workspace, then use the returned workspace_id.",
-        "Veronica is an execution bridge, not an agent runtime."
       ].join(" ")
     }
   );
