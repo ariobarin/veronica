@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod/v4";
@@ -74,10 +75,43 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-function commandInvocation(request: RunCommandRequest): { file: string; args: string[] } {
+function resolveWindowsBatchFile(cwd: string, file: string): string {
+  if (path.isAbsolute(file)) return file;
+  if (file.includes("/") || file.includes("\\")) return path.resolve(cwd, file);
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!directory) continue;
+    const candidate = path.join(directory, file);
+    if (existsSync(candidate)) return candidate;
+  }
+  return file;
+}
+
+function quoteWindowsBatchArgument(value: string): string {
+  if (/[\r\n"%!]/.test(value)) {
+    throw new VeronicaError(
+      "invalid_request",
+      "Windows batch argv does not support quotes, percent signs, exclamation marks, or newlines; use shell_command"
+    );
+  }
+  return `"${value}"`;
+}
+
+function commandInvocation(
+  cwd: string,
+  request: RunCommandRequest
+): { file: string; args: string[]; windowsVerbatimArguments?: boolean } {
   if (request.argv) {
     const [file, ...args] = request.argv;
     if (!file) throw new VeronicaError("invalid_request", "argv must contain an executable");
+    if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(file)) {
+      const batchFile = resolveWindowsBatchFile(cwd, file);
+      const command = [batchFile, ...args].map(quoteWindowsBatchArgument).join(" ");
+      return {
+        file: process.env.ComSpec ?? "cmd.exe",
+        args: ["/d", "/s", "/c", `call ${command}`],
+        windowsVerbatimArguments: true
+      };
+    }
     return { file, args };
   }
   if (request.shellCommand === undefined) {
@@ -87,7 +121,7 @@ function commandInvocation(request: RunCommandRequest): { file: string; args: st
     const file = process.env.SystemRoot ? path.join(process.env.SystemRoot, "System32", "cmd.exe") : "cmd.exe";
     return { file, args: ["/d", "/s", "/c", request.shellCommand] };
   }
-  return { file: "/bin/sh", args: ["-lc", request.shellCommand] };
+  return { file: "/bin/sh", args: ["-c", request.shellCommand] };
 }
 
 function terminateProcessTree(pid: number | undefined): void {
@@ -128,7 +162,7 @@ function terminateProcessTree(pid: number | undefined): void {
 }
 
 async function runCommand(cwd: string, request: RunCommandRequest) {
-  const invocation = commandInvocation(request);
+  const invocation = commandInvocation(cwd, request);
   return await new Promise<{
     exitCode: number | null;
     signal: NodeJS.Signals | null;
@@ -143,6 +177,7 @@ async function runCommand(cwd: string, request: RunCommandRequest) {
       env: process.env,
       detached: process.platform !== "win32",
       windowsHide: true,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
       stdio: ["pipe", "pipe", "pipe"]
     });
 
