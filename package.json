@@ -1,0 +1,33 @@
+{
+  "name": "@ariobarin/veronica",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Expose a local coding workspace to an agent through a small remote gateway.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "veronica": "dist/cli.js",
+    "veronica-gateway": "dist/server.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "npm run build && npm test",
+    "dev": "tsx src/cli.ts",
+    "dev:gateway": "tsx src/server.ts",
+    "start": "node dist/server.js",
+    "test": "tsx --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "express": "5.1.0",
+    "zod": "4.1.12"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.5",
+    "@types/node": "24.10.1",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}
