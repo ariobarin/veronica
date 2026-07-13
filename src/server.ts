@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import express, { type Request, type Response } from "express";
 import { realpathSync } from "node:fs";
 import path from "node:path";
