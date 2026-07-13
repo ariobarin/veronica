@@ -7,11 +7,6 @@
 
 <h1 align="center">Veronica</h1>
 
-<p align="center">
-  <strong>Quiet infrastructure for powerful agents.</strong><br>
-  Expose a workspace. Keep authority local.
-</p>
-
 Veronica lets an agent use a directory on one of your computers as a remote coding workspace.
 
 ```text
