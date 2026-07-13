@@ -19,6 +19,8 @@ import { canonicalizeRoot, resolveExistingPath, resolveWritePath } from "./path-
 const registerResponseSchema = z.object({ deviceId: z.string().uuid() });
 const pollResponseSchema = z.object({ job: deviceJobSchema.nullable() });
 
+type RunCommandRequest = Extract<WorkerRequest, { type: "run_command" }>;
+
 class GatewayError extends Error {
   constructor(
     message: string,
@@ -72,23 +74,76 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function runCommand(cwd: string, command: string, timeoutSeconds: number) {
-  const shell = process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : process.env.SHELL ?? "/bin/sh";
-  const args = process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-lc", command];
+function commandInvocation(request: RunCommandRequest): { file: string; args: string[] } {
+  if (request.argv) {
+    const [file, ...args] = request.argv;
+    if (!file) throw new VeronicaError("invalid_request", "argv must contain an executable");
+    return { file, args };
+  }
+  if (request.shellCommand === undefined) {
+    throw new VeronicaError("invalid_request", "Provide exactly one of argv or shell_command");
+  }
+  if (process.platform === "win32") {
+    const file = process.env.SystemRoot ? path.join(process.env.SystemRoot, "System32", "cmd.exe") : "cmd.exe";
+    return { file, args: ["/d", "/s", "/c", request.shellCommand] };
+  }
+  return { file: "/bin/sh", args: ["-lc", request.shellCommand] };
+}
 
+function terminateProcessTree(pid: number | undefined): void {
+  if (!pid) return;
+  if (process.platform === "win32") {
+    const killer = spawn("taskkill.exe", ["/pid", String(pid), "/t", "/f"], {
+      windowsHide: true,
+      stdio: "ignore"
+    });
+    killer.on("error", () => {
+      try {
+        process.kill(pid);
+      } catch {
+        // The process already exited.
+      }
+    });
+    return;
+  }
+
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      return;
+    }
+  }
+
+  const force = setTimeout(() => {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // The process group already exited.
+    }
+  }, 500);
+  force.unref();
+}
+
+async function runCommand(cwd: string, request: RunCommandRequest) {
+  const invocation = commandInvocation(request);
   return await new Promise<{
     exitCode: number | null;
     signal: NodeJS.Signals | null;
+    spawnError: string | null;
     stdout: string;
     stderr: string;
     truncated: boolean;
     timedOut: boolean;
-  }>((resolve, reject) => {
-    const child = spawn(shell, args, {
+  }>(resolve => {
+    const child = spawn(invocation.file, invocation.args, {
       cwd,
       env: process.env,
+      detached: process.platform !== "win32",
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: ["pipe", "pipe", "pipe"]
     });
 
     const stdout: Buffer[] = [];
@@ -96,6 +151,7 @@ async function runCommand(cwd: string, command: string, timeoutSeconds: number) 
     let capturedBytes = 0;
     let truncated = false;
     let timedOut = false;
+    let settled = false;
 
     const capture = (chunk: Buffer, target: Buffer[]) => {
       const remaining = MAX_TEXT_BYTES - capturedBytes;
@@ -109,26 +165,34 @@ async function runCommand(cwd: string, command: string, timeoutSeconds: number) 
       if (accepted.length !== chunk.length) truncated = true;
     };
 
-    child.stdout.on("data", (chunk: Buffer) => capture(chunk, stdout));
-    child.stderr.on("data", (chunk: Buffer) => capture(chunk, stderr));
-    child.on("error", reject);
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, timeoutSeconds * 1000);
-
-    child.on("close", (exitCode, signal) => {
+    const finish = (exitCode: number | null, signal: NodeJS.Signals | null, spawnError: string | null) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       resolve({
         exitCode,
         signal,
+        spawnError,
         stdout: Buffer.concat(stdout).toString("utf8"),
         stderr: Buffer.concat(stderr).toString("utf8"),
         truncated,
         timedOut
       });
-    });
+    };
+
+    child.stdout.on("data", (chunk: Buffer) => capture(chunk, stdout));
+    child.stderr.on("data", (chunk: Buffer) => capture(chunk, stderr));
+    child.stdin.on("error", () => undefined);
+    child.on("error", error => finish(null, null, error.message));
+    child.on("close", (exitCode, signal) => finish(exitCode, signal, null));
+
+    if (request.stdin === undefined) child.stdin.end();
+    else child.stdin.end(request.stdin, "utf8");
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminateProcessTree(child.pid);
+    }, (request.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS) * 1000);
   });
 }
 
@@ -225,11 +289,7 @@ export async function executeWorkerRequest(root: string, request: WorkerRequest)
     };
   }
 
-  return await runCommand(
-    workspace,
-    request.command,
-    request.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS
-  );
+  return await runCommand(workspace, request);
 }
 
 export async function executeDeviceJob(root: string, job: DeviceJob): Promise<WorkerResult> {

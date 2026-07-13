@@ -15,7 +15,25 @@ test("worker request limits are shared before jobs reach a device", () => {
     workerRequestSchema.safeParse({
       type: "run_command",
       workspace: ".",
-      command: "x".repeat(100_001),
+      shellCommand: "x".repeat(100_001),
+      timeoutSeconds: 10
+    }).success,
+    false
+  );
+  assert.equal(
+    workerRequestSchema.safeParse({
+      type: "run_command",
+      workspace: ".",
+      timeoutSeconds: 10
+    }).success,
+    false
+  );
+  assert.equal(
+    workerRequestSchema.safeParse({
+      type: "run_command",
+      workspace: ".",
+      argv: ["node"],
+      shellCommand: "node --version",
       timeoutSeconds: 10
     }).success,
     false

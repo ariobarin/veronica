@@ -42,7 +42,7 @@ OAuth protects the public MCP endpoint. The gateway verifies access token signat
 - Text file and captured command output are limited to 1 MiB.
 - File reads return a SHA-256 revision, and writes may require that revision before atomic replacement.
 - Queued jobs carry an expiry and are removed when their caller times out.
-- Command duration is limited by the requested timeout.
+- Command duration is limited by the requested timeout, with process-tree termination on Windows and Unix-like systems.
 - Device, workspace, and job state is held only in memory.
 
 ## Known limitations
@@ -53,7 +53,7 @@ OAuth protects the public MCP endpoint. The gateway verifies access token signat
 - There is no local approval prompt or durable audit log.
 - Shell commands inherit the worker's environment.
 - Shell execution is not isolated from the rest of the user account.
-- A timed-out command receives a basic child-process kill, not a guaranteed process-tree kill on every platform.
+- Timed-out commands use operating system process-tree termination, but abrupt termination can still leave application-level state partially written.
 - Gateway expiry prevents queued work from starting late, but it does not cancel a command that already started.
 - MCP disconnects do not yet cancel worker jobs.
 - Revision checks detect stale content observed before replacement but are not a cross-process file-locking system.

@@ -74,7 +74,7 @@ write_file
 run_command
 ```
 
-File reads return a SHA-256 revision. File writes replace content atomically and may require an expected revision to detect stale edits. The MCP gateway adds discovery and lease management around those operations:
+File reads return a SHA-256 revision. File writes replace content atomically and may require an expected revision to detect stale edits. Command jobs accept exactly one direct argument array or shell command and may carry standard input. Direct execution avoids host-shell quoting, while explicit shell commands use `cmd.exe` on Windows and `/bin/sh` elsewhere. The MCP gateway adds discovery and lease management around those operations:
 
 ```text
 list_devices
@@ -97,6 +97,7 @@ Long polling works through NAT and ordinary reverse proxies, requires no inbound
 - A queued job is removed when its caller times out. A command that already started is not yet cancelled by a gateway timeout.
 - If a device reconnects under a stale name, old workspaces for that device are removed.
 - Command output is capped at 1 MiB and returned only when the process exits.
+- Command timeouts terminate the operating system process tree and report `timedOut` in the completed result.
 
 ## Growth order
 
