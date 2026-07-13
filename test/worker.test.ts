@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { canonicalizeRoot } from "../src/path-policy.js";
-import { executeDeviceJob, executeWorkerRequest } from "../src/worker.js";
+import { executeWorkerRequest } from "../src/worker.js";
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -56,6 +56,28 @@ test("worker executes file and command requests inside a workspace", async t => 
   assert.equal(await readFile(path.join(root, "README.md"), "utf8"), "updated");
   assert.equal((await readdir(root)).some(entry => entry.endsWith(".tmp")), false);
 
+  const longName = `${"x".repeat(220)}.txt`;
+  await executeWorkerRequest(root, {
+    type: "write_file",
+    workspace: ".",
+    path: longName,
+    content: "long name"
+  });
+  assert.equal(await readFile(path.join(root, longName), "utf8"), "long name");
+
+  if (process.platform !== "win32") {
+    const executable = path.join(root, "script.sh");
+    await writeFile(executable, "#!/bin/sh\n", "utf8");
+    await chmod(executable, 0o751);
+    await executeWorkerRequest(root, {
+      type: "write_file",
+      workspace: ".",
+      path: "script.sh",
+      content: "#!/bin/sh\nprintf preserved\n"
+    });
+    assert.equal((await stat(executable)).mode & 0o777, 0o751);
+  }
+
   const command = (await executeWorkerRequest(root, {
     type: "run_command",
     workspace: ".",
@@ -75,18 +97,3 @@ test("worker executes file and command requests inside a workspace", async t => 
   assert.equal(command.timedOut, false);
 });
 
-test("worker rejects expired jobs before execution", async () => {
-  const result = await executeDeviceJob(
-    ".",
-    {
-      id: randomUUID(),
-      expiresAt: Date.now() - 1,
-      request: { type: "open_workspace", path: "." }
-    },
-    Date.now()
-  );
-  assert.deepEqual(result, {
-    ok: false,
-    error: { code: "expired", message: "Device job expired before execution" }
-  });
-});

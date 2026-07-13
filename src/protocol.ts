@@ -18,7 +18,6 @@ export const veronicaErrorCodeSchema = z.enum([
   "conflict",
   "unavailable",
   "timeout",
-  "expired",
   "operation_failed"
 ]);
 export type VeronicaErrorCode = z.infer<typeof veronicaErrorCodeSchema>;
@@ -78,7 +77,6 @@ export type WorkerResult = z.infer<typeof workerResultSchema>;
 
 export const deviceJobSchema = z.object({
   id: z.string().uuid(),
-  expiresAt: z.number().int().positive(),
   request: workerRequestSchema
 });
 export type DeviceJob = z.infer<typeof deviceJobSchema>;

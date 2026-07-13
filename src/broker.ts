@@ -160,7 +160,7 @@ export class Broker {
     timeoutMs = DEFAULT_JOB_TIMEOUT_MS
   ): Promise<WorkerResult> {
     const device = this.requireDevice(deviceId);
-    const job: DeviceJob = { id: randomUUID(), expiresAt: Date.now() + timeoutMs, request };
+    const job: DeviceJob = { id: randomUUID(), request };
 
     const result = new Promise<WorkerResult>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -181,13 +181,7 @@ export class Broker {
     while (device.queue.length > 0) {
       const job = device.queue.shift();
       if (!job) return null;
-      if (job.expiresAt > Date.now() && this.pendingJobs.has(job.id)) return job;
-
-      const pending = this.pendingJobs.get(job.id);
-      if (!pending) continue;
-      clearTimeout(pending.timer);
-      this.pendingJobs.delete(job.id);
-      pending.reject(new VeronicaError("expired", "Device job expired before delivery"));
+      if (this.pendingJobs.has(job.id)) return job;
     }
     return null;
   }

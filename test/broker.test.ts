@@ -59,7 +59,7 @@ test("broker removes queued jobs when their caller times out", async () => {
   assert.equal(
     broker.completeJob(deviceId, randomUUID(), {
       ok: false,
-      error: { code: "expired", message: "late result" }
+      error: { code: "operation_failed", message: "late result" }
     }),
     false
   );

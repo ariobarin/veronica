@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod/v4";
 import {
@@ -160,9 +160,18 @@ async function assertExpectedHash(file: string, expectedSha256: string): Promise
 }
 
 async function replaceFileAtomically(file: string, content: string): Promise<void> {
-  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${randomUUID()}.tmp`);
+  const temporary = path.join(path.dirname(file), `.veronica-${randomUUID()}.tmp`);
+  let existingMode: number | undefined;
   try {
-    await writeFile(temporary, content, { encoding: "utf8", flag: "wx" });
+    existingMode = (await stat(file)).mode;
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String(error.code) : undefined;
+    if (code !== "ENOENT") throw error;
+  }
+
+  try {
+    await writeFile(temporary, content, { encoding: "utf8", flag: "wx", mode: existingMode });
+    if (existingMode !== undefined && process.platform !== "win32") await chmod(temporary, existingMode);
     await rename(temporary, file);
   } finally {
     await rm(temporary, { force: true });
@@ -206,13 +215,7 @@ export async function executeWorkerRequest(root: string, request: WorkerRequest)
   );
 }
 
-export async function executeDeviceJob(root: string, job: DeviceJob, now = Date.now()): Promise<WorkerResult> {
-  if (job.expiresAt <= now) {
-    return {
-      ok: false,
-      error: { code: "expired", message: "Device job expired before execution" }
-    };
-  }
+export async function executeDeviceJob(root: string, job: DeviceJob): Promise<WorkerResult> {
   try {
     return { ok: true, value: await executeWorkerRequest(root, job.request) };
   } catch (error) {

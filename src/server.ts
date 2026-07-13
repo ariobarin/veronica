@@ -225,7 +225,7 @@ function statusForError(error: unknown): number {
   if (error.code === "not_found") return 404;
   if (error.code === "conflict") return 409;
   if (error.code === "unavailable") return 503;
-  if (error.code === "timeout" || error.code === "expired") return 504;
+  if (error.code === "timeout") return 504;
   return 400;
 }
 
