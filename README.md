@@ -1,10 +1,24 @@
-# Veronica
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/veronica-mark-inverse.svg">
+    <img src="docs/assets/veronica-mark.svg" alt="Veronica mark" width="112" height="112">
+  </picture>
+</p>
+
+<h1 align="center">Veronica</h1>
+
+<p align="center">
+  <strong>Quiet infrastructure for powerful agents.</strong><br>
+  Expose a workspace. Keep authority local.
+</p>
 
 Veronica lets an agent use a directory on one of your computers as a remote coding workspace.
 
 ```text
 agent -> MCP gateway -> exposed computer -> files and shell
 ```
+
+Veronica is deliberately not another agent. It is the controlled handoff between a harness that decides and a machine that executes.
 
 On a computer you want to expose:
 
@@ -23,6 +37,12 @@ An agent harness already owns the model, conversation, planning, retries, and to
 The gateway is intentionally small. It authenticates requests, tracks connected devices in memory, and routes jobs. The exposed computer performs all filesystem and process work.
 
 See [PHILOSOPHY.md](PHILOSOPHY.md) for the durable design rules and [docs/architecture.md](docs/architecture.md) for the current shape.
+
+### Character
+
+Veronica should feel like a trusted operator, not a chatbot: calm, direct, exact about boundaries, and absent until needed. The agent thinks; Veronica connects.
+
+The project avoids theatrical AI language and vague security claims. It names what is exposed, where work runs, and which component owns each decision. See the [brand guide](docs/brand.md) for the visual system and writing voice.
 
 ## Current prototype
 
