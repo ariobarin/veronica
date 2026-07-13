@@ -26,8 +26,8 @@ You need:
 
 Create an OAuth API or protected resource with:
 
-- Resource and audience: `https://veronica.example.com/`
-- Permissions: `veronica:read` and `veronica:write`
+- Resource and JWT audience: `https://veronica.example.com/`
+- Permission: `veronica:access`
 - Access tokens containing the permissions in either `scope` or `permissions`
 - The exact issuer URL and a public JWKS endpoint
 - Authorization code with PKCE for public clients
@@ -67,7 +67,6 @@ Set the public OAuth identity and the private listener addresses:
 
 ```bash
 export VERONICA_OAUTH_ISSUER="https://identity.example.com/"
-export VERONICA_OAUTH_AUDIENCE="https://veronica.example.com/"
 export VERONICA_OAUTH_RESOURCE="https://veronica.example.com/"
 export HOSTS="127.0.0.1,10.20.0.1"
 export PORT="39100"
@@ -75,7 +74,7 @@ export VERONICA_ALLOWED_HOSTS="veronica.example.com,10.20.0.1,127.0.0.1,localhos
 npm start
 ```
 
-`VERONICA_OAUTH_AUDIENCE` must exactly match `VERONICA_OAUTH_RESOURCE`. Veronica obtains signing keys from `<issuer>/.well-known/jwks.json` by default. Set `VERONICA_OAUTH_JWKS_URI` when your provider publishes keys elsewhere.
+`VERONICA_OAUTH_RESOURCE` is also the required JWT audience. Veronica obtains signing keys from `<issuer>/.well-known/jwks.json` by default. Set `VERONICA_OAUTH_JWKS_URI` when your provider publishes keys elsewhere.
 
 Confirm both private listeners:
 

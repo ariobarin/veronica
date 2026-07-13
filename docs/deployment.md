@@ -22,7 +22,7 @@ Define these values before installing anything:
 | Purpose | Example |
 | --- | --- |
 | Public MCP origin | `https://veronica.example.com` |
-| OAuth resource and audience | `https://veronica.example.com/` |
+| OAuth resource and JWT audience | `https://veronica.example.com/` |
 | OAuth issuer | `https://identity.example.com/` |
 | Gateway loopback address | `127.0.0.1` |
 | Gateway private address | `10.20.0.1` |
@@ -30,11 +30,11 @@ Define these values before installing anything:
 | Worker name | `laptop` |
 | Exposed worker root | `/home/user/code` |
 
-Keep the public origin and OAuth resource distinct where the trailing slash matters. `VERONICA_OAUTH_AUDIENCE` must exactly equal `VERONICA_OAUTH_RESOURCE`.
+Keep the public origin and OAuth resource distinct where the trailing slash matters. Veronica uses the exact OAuth resource as the JWT audience.
 
 ## Configure the identity provider
 
-Create one API or protected resource with the two permissions `veronica:read` and `veronica:write`.
+Create one API or protected resource with the permission `veronica:access`.
 
 Veronica accepts access tokens that meet all of these conditions:
 
@@ -98,7 +98,6 @@ The environment should have this shape:
 ```dotenv
 VERONICA_DEVICE_TOKEN=<random value with at least 32 characters>
 VERONICA_OAUTH_ISSUER=https://identity.example.com/
-VERONICA_OAUTH_AUDIENCE=https://veronica.example.com/
 VERONICA_OAUTH_RESOURCE=https://veronica.example.com/
 HOSTS=127.0.0.1,10.20.0.1
 PORT=39100

@@ -32,7 +32,7 @@ OAuth protects the public MCP endpoint. The gateway verifies access token signat
 
 ## Implemented controls
 
-- `/mcp` requires an OAuth access token with `veronica:read` and `veronica:write` scopes.
+- `/mcp` requires an OAuth access token with the `veronica:access` scope.
 - `/device/*` requires the private device bearer token.
 - The gateway publishes OAuth protected resource metadata and returns a standards-based bearer challenge.
 - A worker exposes one canonical directory root. With no path, the CLI selects the Git worktree root and refuses home or filesystem roots without explicit confirmation.

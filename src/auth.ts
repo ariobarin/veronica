@@ -5,7 +5,7 @@ import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/p
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey, type JWTPayload } from "jose";
 
-export const VERONICA_OAUTH_SCOPES = ["veronica:read", "veronica:write"] as const;
+export const VERONICA_OAUTH_SCOPES = ["veronica:access"] as const;
 
 export interface VeronicaOAuthConfig {
   issuer: URL;
@@ -37,14 +37,9 @@ export function resolveOAuthConfig(environment: NodeJS.ProcessEnv = process.env)
   const jwksUri = configuredJwksUri
     ? httpsUrl("VERONICA_OAUTH_JWKS_URI", configuredJwksUri)
     : new URL(".well-known/jwks.json", issuer.href.endsWith("/") ? issuer : new URL(`${issuer.href}/`));
-  const audience = requiredValue(environment, "VERONICA_OAUTH_AUDIENCE");
-  if (audience !== resource.href) {
-    throw new Error("VERONICA_OAUTH_AUDIENCE must exactly match VERONICA_OAUTH_RESOURCE");
-  }
-
   return {
     issuer,
-    audience,
+    audience: resource.href,
     resource,
     jwksUri,
     scopes: [...VERONICA_OAUTH_SCOPES]

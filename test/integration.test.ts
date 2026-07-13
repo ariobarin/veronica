@@ -29,7 +29,6 @@ test("gateway routes real workspace operations through a polling worker", async 
   const broker = new Broker();
   const oauth = resolveOAuthConfig({
     VERONICA_OAUTH_ISSUER: "https://tenant.example.com/",
-    VERONICA_OAUTH_AUDIENCE: "https://veronica.example.com/",
     VERONICA_OAUTH_RESOURCE: "https://veronica.example.com/"
   });
   const token = "d".repeat(32);

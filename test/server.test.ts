@@ -31,13 +31,13 @@ test("listen hosts include distinct loopback and WireGuard addresses", () => {
   }
 });
 
-test("legacy host remains a fallback", () => {
+test("legacy HOST does not widen the default listener", () => {
   const previousHosts = process.env.HOSTS;
   const previousHost = process.env.HOST;
   try {
     delete process.env.HOSTS;
-    process.env.HOST = "127.0.0.2";
-    assert.deepEqual(resolveListenHosts(), ["127.0.0.2"]);
+    process.env.HOST = "0.0.0.0";
+    assert.deepEqual(resolveListenHosts(), ["127.0.0.1"]);
   } finally {
     if (previousHosts === undefined) delete process.env.HOSTS;
     else process.env.HOSTS = previousHosts;
@@ -49,16 +49,15 @@ test("legacy host remains a fallback", () => {
 test("gateway separates public OAuth from private device authentication", async t => {
   const oauth = resolveOAuthConfig({
     VERONICA_OAUTH_ISSUER: "https://tenant.example.com/",
-    VERONICA_OAUTH_AUDIENCE: "https://veronica.example.com/",
     VERONICA_OAUTH_RESOURCE: "https://veronica.example.com/"
   });
   const verifier = {
     async verifyAccessToken(token: string): Promise<AuthInfo> {
-      if (token !== "oauth-token" && token !== "read-token") throw new InvalidTokenError("invalid token");
+      if (token !== "oauth-token" && token !== "wrong-scope-token") throw new InvalidTokenError("invalid token");
       return {
         token,
         clientId: "chatgpt",
-        scopes: token === "read-token" ? ["veronica:read"] : [...oauth.scopes],
+        scopes: token === "wrong-scope-token" ? [] : [...oauth.scopes],
         expiresAt: Math.floor(Date.now() / 1000) + 300,
         resource: oauth.resource
       };
@@ -82,12 +81,12 @@ test("gateway separates public OAuth from private device authentication", async 
     resource: "https://veronica.example.com/",
     authorization_servers: ["https://tenant.example.com/"],
     bearer_methods_supported: ["header"],
-    scopes_supported: ["veronica:read", "veronica:write"]
+    scopes_supported: ["veronica:access"]
   });
 
   const challenge = await fetch(`${baseUrl}/mcp`, { method: "POST" });
   assert.equal(challenge.status, 401);
-  assert.match(challenge.headers.get("www-authenticate") ?? "", /scope="veronica:read veronica:write"/);
+  assert.match(challenge.headers.get("www-authenticate") ?? "", /scope="veronica:access"/);
   assert.match(
     challenge.headers.get("www-authenticate") ?? "",
     /resource_metadata="https:\/\/veronica\.example\.com\/\.well-known\/oauth-protected-resource"/
@@ -101,7 +100,7 @@ test("gateway separates public OAuth from private device authentication", async 
 
   const insufficientScope = await fetch(`${baseUrl}/mcp`, {
     method: "POST",
-    headers: { authorization: "Bearer read-token" }
+    headers: { authorization: "Bearer wrong-scope-token" }
   });
   assert.equal(insufficientScope.status, 403);
 

@@ -38,7 +38,7 @@ Run from outside the gateway private network:
 Pass criteria:
 
 - `/healthz` returns the Veronica health document over valid HTTPS.
-- `/.well-known/oauth-protected-resource` identifies the configured resource, authorization server, and both supported scopes.
+- `/.well-known/oauth-protected-resource` identifies the configured resource, authorization server, and the supported scope.
 - Unauthenticated `/mcp` returns `401` with the required scopes and `resource_metadata` in `WWW-Authenticate`.
 - `/device/register` returns `404`.
 - A direct connection to the gateway public address on port `39100` fails.
@@ -68,7 +68,7 @@ Inspect claims without recording the token itself. Confirm:
 - Issuer exactly matches `VERONICA_OAUTH_ISSUER`.
 - Audience exactly matches `VERONICA_OAUTH_RESOURCE`.
 - `exp` is present and current.
-- `veronica:read` and `veronica:write` appear in `scope` or `permissions`.
+- `veronica:access` appears in `scope` or `permissions`.
 - A client identifier appears in `client_id`, `azp`, or `sub`.
 
 The worker token must fail on `/mcp`. An OAuth access token must fail on `/device/register`, `/device/poll`, and `/device/result`.

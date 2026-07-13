@@ -3,23 +3,23 @@ import test from "node:test";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { JwtAccessTokenVerifier, protectedResourceMetadata, resolveOAuthConfig } from "../src/auth.js";
 
-test("OAuth configuration resolves Auth0-compatible defaults", () => {
+test("OAuth configuration derives the audience from the protected resource", () => {
   const config = resolveOAuthConfig({
     VERONICA_OAUTH_ISSUER: "https://tenant.example.com/",
-    VERONICA_OAUTH_AUDIENCE: "https://veronica.example.com/",
     VERONICA_OAUTH_RESOURCE: "https://veronica.example.com/"
   });
 
+  assert.equal(config.audience, "https://veronica.example.com/");
   assert.equal(config.jwksUri.href, "https://tenant.example.com/.well-known/jwks.json");
   assert.deepEqual(protectedResourceMetadata(config), {
     resource: "https://veronica.example.com/",
     authorization_servers: ["https://tenant.example.com/"],
     bearer_methods_supported: ["header"],
-    scopes_supported: ["veronica:read", "veronica:write"]
+    scopes_supported: ["veronica:access"]
   });
 });
 
-test("JWT verifier validates signature, issuer, audience, expiry, and permissions", async () => {
+test("JWT verifier validates signature, issuer, resource audience, expiry, and access scope", async () => {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const publicJwk = await exportJWK(publicKey);
   publicJwk.kid = "test-key";
@@ -27,11 +27,10 @@ test("JWT verifier validates signature, issuer, audience, expiry, and permission
   publicJwk.use = "sig";
   const config = resolveOAuthConfig({
     VERONICA_OAUTH_ISSUER: "https://tenant.example.com/",
-    VERONICA_OAUTH_AUDIENCE: "https://veronica.example.com/",
     VERONICA_OAUTH_RESOURCE: "https://veronica.example.com/"
   });
   const verifier = new JwtAccessTokenVerifier(config, createLocalJWKSet({ keys: [publicJwk] }));
-  const token = await new SignJWT({ permissions: ["veronica:read", "veronica:write"] })
+  const token = await new SignJWT({ permissions: ["veronica:access"] })
     .setProtectedHeader({ alg: "RS256", kid: "test-key" })
     .setIssuer(config.issuer.href)
     .setAudience(config.audience)
@@ -42,10 +41,10 @@ test("JWT verifier validates signature, issuer, audience, expiry, and permission
 
   const auth = await verifier.verifyAccessToken(token);
   assert.equal(auth.clientId, "user-123");
-  assert.deepEqual(auth.scopes, ["veronica:read", "veronica:write"]);
+  assert.deepEqual(auth.scopes, ["veronica:access"]);
   assert.equal(auth.resource?.href, "https://veronica.example.com/");
 
-  const wrongAudience = await new SignJWT({ scope: "veronica:read veronica:write" })
+  const wrongAudience = await new SignJWT({ scope: "veronica:access" })
     .setProtectedHeader({ alg: "RS256", kid: "test-key" })
     .setIssuer(config.issuer.href)
     .setAudience("https://other.example.com/")
@@ -61,21 +60,8 @@ test("OAuth configuration rejects insecure URLs", () => {
     () =>
       resolveOAuthConfig({
         VERONICA_OAUTH_ISSUER: "http://tenant.example.com/",
-        VERONICA_OAUTH_AUDIENCE: "https://veronica.example.com/",
         VERONICA_OAUTH_RESOURCE: "https://veronica.example.com/"
       }),
     /must use HTTPS/
-  );
-});
-
-test("OAuth audience must exactly identify the protected resource", () => {
-  assert.throws(
-    () =>
-      resolveOAuthConfig({
-        VERONICA_OAUTH_ISSUER: "https://tenant.example.com/",
-        VERONICA_OAUTH_AUDIENCE: "https://other.example.com/",
-        VERONICA_OAUTH_RESOURCE: "https://veronica.example.com/"
-      }),
-    /must exactly match/
   );
 });
