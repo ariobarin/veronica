@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import { readConfig } from "./config.js";
+import { DEFAULT_HOST, DEFAULT_PORT, parsePort } from "./defaults.js";
 
 export type DoctorCheck = {
   name: string;
@@ -141,10 +142,38 @@ async function listenerCheck(options: DoctorOptions): Promise<DoctorCheck> {
   };
 }
 
+function formatHost(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+export async function resolveDoctorGateway(options: DoctorOptions): Promise<string> {
+  const environment = options.environment ?? process.env;
+  if (environment.VERONICA_GATEWAY) return environment.VERONICA_GATEWAY;
+  try {
+    const config = await readConfig(options.configPath);
+    if (config.worker?.gateway) return config.worker.gateway;
+    const gatewayConfigured =
+      config.gateway !== undefined ||
+      environment.VERONICA_HOSTS !== undefined ||
+      environment.HOSTS !== undefined ||
+      environment.VERONICA_PORT !== undefined ||
+      environment.PORT !== undefined;
+    if (!gatewayConfigured) return options.gateway;
+    const hosts = options.gatewayHosts ?? config.gateway?.hosts ?? [DEFAULT_HOST];
+    const host = hosts.includes(DEFAULT_HOST) ? DEFAULT_HOST : (hosts[0] ?? DEFAULT_HOST);
+    const rawPort = environment.VERONICA_PORT ?? environment.PORT;
+    const port = rawPort === undefined ? (config.gateway?.port ?? DEFAULT_PORT) : parsePort(rawPort);
+    return `http://${formatHost(host)}:${port}`;
+  } catch {
+    return options.gateway;
+  }
+}
+
 export async function runDoctor(options: DoctorOptions): Promise<DoctorCheck[]> {
   const major = Number.parseInt((options.nodeVersion ?? process.versions.node).split(".")[0] ?? "0", 10);
   const rootMetadata = await stat(options.root);
   const fetcher = options.fetcher ?? fetch;
+  const gateway = await resolveDoctorGateway(options);
   const checks: DoctorCheck[] = [
     {
       name: "Node.js",
@@ -155,8 +184,8 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorCheck[]> 
     { name: "workspace root", ok: rootMetadata.isDirectory(), detail: options.root },
     await listenerCheck(options)
   ];
-  checks.push(await healthCheck(options.gateway, fetcher));
-  checks.push(await workerAuthenticationCheck(options.gateway, options.workerToken, fetcher));
+  checks.push(await healthCheck(gateway, fetcher));
+  checks.push(await workerAuthenticationCheck(gateway, options.workerToken, fetcher));
   return checks;
 }
 
