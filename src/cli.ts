@@ -88,6 +88,16 @@ function samePath(left: string, right: string): boolean {
   return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
+function rootLabel(root: string): string {
+  const raw = (path.basename(root) || root).trim() || "workspace";
+  let label = "";
+  for (const character of raw) {
+    if (label.length + character.length > 128) break;
+    label += character;
+  }
+  return label;
+}
+
 export async function resolveExposeRoot(
   requestedRoot: string | undefined,
   options: ResolveExposeRootOptions = {}
@@ -122,7 +132,7 @@ export async function resolveExposeRoot(
 
   return {
     root,
-    label: path.basename(root) || root,
+    label: rootLabel(root),
     source
   };
 }

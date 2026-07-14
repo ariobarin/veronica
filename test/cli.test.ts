@@ -66,6 +66,17 @@ test("CLI selects the Git worktree root when no path is provided", async t => {
   });
 });
 
+test("CLI truncates generated root labels to the protocol limit", async t => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), "veronica-cli-label-"));
+  const longName = "x".repeat(140);
+  const rootInput = path.join(parent, longName);
+  await mkdir(rootInput);
+  t.after(() => rm(parent, { recursive: true, force: true }));
+
+  const selected = await resolveExposeRoot(rootInput, { cwd: parent });
+  assert.equal(selected.label, "x".repeat(128));
+});
+
 test("CLI requires explicit confirmation for broad roots", async t => {
   const rootInput = await mkdtemp(path.join(os.tmpdir(), "veronica-cli-home-"));
   t.after(() => rm(rootInput, { recursive: true, force: true }));
