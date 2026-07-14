@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_GATEWAY } from "./defaults.js";
 import { canonicalizeRoot } from "./path-policy.js";
 import { runWorker } from "./worker.js";
 
@@ -15,14 +16,30 @@ function usage(): string {
   return `Veronica
 
 Usage:
+  veronica [path] [--name <name>] [--gateway <url>] [--allow-broad-root]
   veronica expose [path] [--name <name>] [--gateway <url>] [--allow-broad-root]
+  veronica gateway
+  veronica --help
 
 Environment:
-  VERONICA_GATEWAY   Gateway URL, default http://127.0.0.1:3000
+  VERONICA_GATEWAY   Gateway URL, default ${DEFAULT_GATEWAY}
   VERONICA_TOKEN     Private worker bearer token
 
-With no path, Veronica exposes the current Git worktree root. Outside a Git worktree, pass an explicit path.
+With no command, Veronica exposes the current Git worktree root. Outside a Git worktree, pass an explicit path.
 `;
+}
+
+export type CliCommand = { kind: "help" } | { kind: "gateway" } | { kind: "expose"; args: string[] };
+
+export function parseCliCommand(args: string[]): CliCommand {
+  const [command, ...rest] = args;
+  if (command === "--help" || command === "-h" || command === "help") return { kind: "help" };
+  if (command === "gateway") {
+    if (rest.length > 0) throw new Error(`Unexpected gateway argument: ${rest[0]}`);
+    return { kind: "gateway" };
+  }
+  if (command === "expose") return { kind: "expose", args: rest };
+  return { kind: "expose", args };
 }
 
 export type ExposeOptions = {
@@ -40,7 +57,7 @@ export function parseExposeArgs(
 ): ExposeOptions {
   let root: string | undefined;
   let name = hostname;
-  let gateway = environment.VERONICA_GATEWAY ?? "http://127.0.0.1:3000";
+  let gateway = environment.VERONICA_GATEWAY ?? DEFAULT_GATEWAY;
   const token = environment.VERONICA_TOKEN ?? "";
   let allowBroadRoot = false;
 
@@ -137,15 +154,8 @@ export async function resolveExposeRoot(
   };
 }
 
-export async function main(args = process.argv.slice(2)): Promise<void> {
-  const [command, ...commandArgs] = args;
-  if (!command || command === "--help" || command === "-h") {
-    console.log(usage());
-    return;
-  }
-  if (command !== "expose") throw new Error(`Unknown command: ${command}\n\n${usage()}`);
-
-  const options = parseExposeArgs(commandArgs);
+async function expose(args: string[]): Promise<void> {
+  const options = parseExposeArgs(args);
   const selected = await resolveExposeRoot(options.root, { allowBroadRoot: options.allowBroadRoot });
   const controller = new AbortController();
   const stop = () => controller.abort();
@@ -165,6 +175,20 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
   }
+}
+
+export async function main(args = process.argv.slice(2)): Promise<void> {
+  const command = parseCliCommand(args);
+  if (command.kind === "help") {
+    console.log(usage());
+    return;
+  }
+  if (command.kind === "gateway") {
+    const { startServer } = await import("./server.js");
+    startServer();
+    return;
+  }
+  await expose(command.args);
 }
 
 export function isCliMainModule(

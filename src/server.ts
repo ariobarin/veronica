@@ -9,6 +9,7 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod/v4";
 import { Broker } from "./broker.js";
+import { DEFAULT_HOST, DEFAULT_PORT } from "./defaults.js";
 import { requireDeviceToken } from "./device-auth.js";
 import {
   argvSchema,
@@ -240,7 +241,7 @@ export function resolveAllowedHosts(): string[] | undefined {
 }
 
 export function resolveListenHosts(): string[] {
-  const configured = process.env.HOSTS ?? "127.0.0.1";
+  const configured = process.env.HOSTS ?? DEFAULT_HOST;
   const hosts = [...new Set(configured.split(",").map(host => host.trim()).filter(Boolean))];
   if (hosts.length === 0) throw new Error("HOSTS must contain at least one address");
   return hosts;
@@ -329,7 +330,7 @@ export function startServer() {
   }
 
   const hosts = resolveListenHosts();
-  const port = Number.parseInt(process.env.PORT ?? "3000", 10);
+  const port = Number.parseInt(process.env.PORT ?? String(DEFAULT_PORT), 10);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid PORT: ${process.env.PORT}`);
 
   const app = createGatewayApp({ deviceToken });

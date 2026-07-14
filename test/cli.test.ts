@@ -4,7 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { isCliMainModule, parseExposeArgs, resolveExposeRoot } from "../src/cli.js";
+import { isCliMainModule, parseCliCommand, parseExposeArgs, resolveExposeRoot } from "../src/cli.js";
+
+test("CLI routes the default, explicit, gateway, and help commands", () => {
+  assert.deepEqual(parseCliCommand([]), { kind: "expose", args: [] });
+  assert.deepEqual(parseCliCommand(["repo", "--name", "laptop"]), {
+    kind: "expose",
+    args: ["repo", "--name", "laptop"]
+  });
+  assert.deepEqual(parseCliCommand(["expose", "repo"]), { kind: "expose", args: ["repo"] });
+  assert.deepEqual(parseCliCommand(["gateway"]), { kind: "gateway" });
+  assert.deepEqual(parseCliCommand(["--help"]), { kind: "help" });
+  assert.deepEqual(parseCliCommand(["help"]), { kind: "help" });
+  assert.throws(() => parseCliCommand(["gateway", "extra"]), /Unexpected gateway argument/);
+});
 
 test("CLI parses explicit expose options without command-line secrets", () => {
   assert.deepEqual(
@@ -28,6 +41,13 @@ test("CLI parses explicit expose options without command-line secrets", () => {
 });
 
 test("CLI uses environment defaults and rejects malformed arguments", () => {
+  assert.deepEqual(parseExposeArgs([], { VERONICA_TOKEN: "secret" }, "desktop"), {
+    root: undefined,
+    name: "desktop",
+    gateway: "http://127.0.0.1:39100",
+    token: "secret",
+    allowBroadRoot: false
+  });
   assert.deepEqual(
     parseExposeArgs([], { VERONICA_GATEWAY: "http://private.test", VERONICA_TOKEN: "secret" }, "desktop"),
     {
