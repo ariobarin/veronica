@@ -120,3 +120,13 @@ test("broker removes queued jobs when their caller times out", async () => {
     false
   );
 });
+
+
+test("broker shutdown rejects pending jobs", async () => {
+  const broker = new Broker();
+  broker.registerDevice("local", "test", "repo");
+  const pending = broker.openWorkspace(undefined, ".");
+  broker.shutdown("Local gateway stopped");
+  await assert.rejects(pending, /Local gateway stopped/);
+  assert.deepEqual(broker.listDevices(), []);
+});

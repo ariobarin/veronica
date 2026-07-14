@@ -13,4 +13,6 @@ test("local gateway binds to loopback with an ephemeral worker token", async t =
   const health = await fetch(`${gateway.gatewayUrl}/healthz`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), { ok: true, service: "veronica" });
+  await gateway.close();
+  await gateway.close();
 });

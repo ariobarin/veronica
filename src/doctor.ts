@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { readConfig } from "./config.js";
 import { DEFAULT_HOST, DEFAULT_PORT, parsePort } from "./defaults.js";
+import { resolveListenHosts } from "./server.js";
 
 export type DoctorCheck = {
   name: string;
@@ -146,9 +147,16 @@ async function listenerCheck(options: DoctorOptions): Promise<DoctorCheck> {
       detail: "not configured on this machine; inspect the gateway host"
     };
   }
-  const hosts = options.gatewayHosts;
-  if (!hosts || hosts.length === 0) {
-    return { name: "gateway listeners", ok: false, detail: "configured listener addresses could not be resolved" };
+  let hosts: string[];
+  try {
+    const config = await readConfig(options.configPath);
+    hosts = options.gatewayHosts ?? resolveListenHosts(environment, config.gateway);
+  } catch (error) {
+    return {
+      name: "gateway listeners",
+      ok: false,
+      detail: error instanceof Error ? error.message : String(error)
+    };
   }
   return {
     name: "gateway listeners",
@@ -179,7 +187,7 @@ export async function resolveDoctorGateway(options: DoctorOptions): Promise<stri
     environment.VERONICA_PORT !== undefined ||
     environment.PORT !== undefined;
   if (!gatewayConfigured) return options.gateway;
-  const hosts = options.gatewayHosts ?? config.gateway?.hosts ?? [DEFAULT_HOST];
+  const hosts = options.gatewayHosts ?? resolveListenHosts(environment, config.gateway);
   const host = hosts.includes(DEFAULT_HOST) ? DEFAULT_HOST : (hosts[0] ?? DEFAULT_HOST);
   const rawPort = environment.VERONICA_PORT ?? environment.PORT;
   const port = rawPort === undefined ? (config.gateway?.port ?? DEFAULT_PORT) : parsePort(rawPort);

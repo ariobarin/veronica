@@ -385,12 +385,10 @@ async function doctor(args: string[]): Promise<void> {
   const gateway = process.env.VERONICA_GATEWAY ?? config.worker?.gateway ?? DEFAULT_GATEWAY;
   const workerToken = process.env.VERONICA_TOKEN ?? config.worker?.token;
   const { formatDoctorChecks, runDoctor } = await import("./doctor.js");
-  const { resolveListenHosts } = await import("./server.js");
   const checks = await runDoctor({
     configPath,
     root: selected.root,
     gateway,
-    gatewayHosts: resolveListenHosts(process.env, config.gateway),
     workerToken
   });
   console.log(formatDoctorChecks(checks));

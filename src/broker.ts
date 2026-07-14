@@ -64,6 +64,16 @@ export class Broker {
     this.deviceRetentionMs = options.deviceRetentionMs ?? DEFAULT_DEVICE_RETENTION_MS;
   }
 
+  shutdown(reason = "Broker shut down"): void {
+    for (const deviceId of [...this.devices.keys()]) this.disconnectDevice(deviceId, reason);
+    for (const [jobId, pending] of this.pendingJobs) {
+      clearTimeout(pending.timer);
+      this.pendingJobs.delete(jobId);
+      pending.reject(new VeronicaError("unavailable", reason));
+    }
+    this.workspaces.clear();
+  }
+
   registerDevice(name: string, platform: string, rootLabel = name): string {
     this.pruneStaleDevices();
     const existingId = this.devicesByName.get(name);
