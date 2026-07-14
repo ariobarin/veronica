@@ -14,6 +14,16 @@ The gateway provides six MCP tools: `list_devices`, `open_workspace`, `read_file
 
 Node.js 20 or newer is required on the gateway and workers.
 
+Install the published command-line tools:
+
+```bash
+npm install --global @ariobarin/veronica
+```
+
+This installs the `veronica` worker command and the `veronica-gateway` gateway command.
+
+To work from a repository checkout instead:
+
 ```bash
 git clone https://github.com/ariobarin/veronica.git
 cd veronica
@@ -22,7 +32,7 @@ npm run check
 npm link
 ```
 
-`npm link` installs the built `veronica` and `veronica-gateway` commands. On Windows, npm's global command directory is usually `%APPDATA%\npm`.
+On Windows, npm's global command directory is usually `%APPDATA%\npm`.
 
 ## Start a gateway
 
