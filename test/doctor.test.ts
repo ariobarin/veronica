@@ -156,3 +156,29 @@ test("doctor reports a rejected worker token", async t => {
   assert.equal(checks.find(check => check.name === "worker authentication")?.ok, false);
   assert.match(formatDoctorChecks(checks), /token rejected with HTTP 401/);
 });
+
+
+test("doctor reports malformed saved configuration", async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "veronica-doctor-malformed-"));
+  const configPath = path.join(directory, "config.json");
+  const root = path.join(directory, "repo");
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(root);
+  await writeFile(configPath, "{not-json", { mode: 0o600 });
+
+  const checks = await runDoctor({
+    configPath,
+    root,
+    gateway: "http://127.0.0.1:39100",
+    workerToken: "worker-token",
+    fetcher: async input => {
+      const url = requestUrl(input);
+      if (url.pathname === "/healthz") return Response.json({ ok: true, service: "veronica" });
+      return Response.json({ error: { code: "invalid_request" } }, { status: 400 });
+    }
+  });
+
+  assert.equal(checks.find(check => check.name === "config")?.ok, false);
+  assert.equal(checks.find(check => check.name === "gateway listeners")?.ok, false);
+  assert.match(formatDoctorChecks(checks), /Invalid Veronica config JSON/);
+});

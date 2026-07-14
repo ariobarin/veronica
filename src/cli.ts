@@ -372,12 +372,18 @@ async function local(args: string[]): Promise<void> {
   }
 }
 
-async function doctor(args: string[], config: VeronicaConfig): Promise<void> {
+async function doctor(args: string[]): Promise<void> {
   const options = parseDoctorArgs(args);
   const selected = await resolveExposeRoot(options.root, { allowBroadRoot: options.allowBroadRoot });
+  const configPath = resolveConfigPath();
+  let config: VeronicaConfig = {};
+  try {
+    config = await readConfig(configPath);
+  } catch {
+    // The diagnostic layer reports the malformed or unreadable config.
+  }
   const gateway = process.env.VERONICA_GATEWAY ?? config.worker?.gateway ?? DEFAULT_GATEWAY;
   const workerToken = process.env.VERONICA_TOKEN ?? config.worker?.token;
-  const configPath = resolveConfigPath();
   const { formatDoctorChecks, runDoctor } = await import("./doctor.js");
   const { resolveListenHosts } = await import("./server.js");
   const checks = await runDoctor({
@@ -409,14 +415,15 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     return;
   }
 
+  if (command.kind === "doctor") {
+    await doctor(command.args);
+    return;
+  }
+
   const config = await readConfig();
   if (command.kind === "gateway") {
     const { startServer } = await import("./server.js");
     startServer({ config: config.gateway });
-    return;
-  }
-  if (command.kind === "doctor") {
-    await doctor(command.args, config);
     return;
   }
   await expose(command.args, config);

@@ -24,7 +24,17 @@ export type DoctorOptions = {
 async function configChecks(file: string, platform: NodeJS.Platform): Promise<DoctorCheck[]> {
   try {
     const metadata = await stat(file);
-    const checks: DoctorCheck[] = [{ name: "config", ok: metadata.isFile(), detail: file }];
+    let configCheck: DoctorCheck = { name: "config", ok: metadata.isFile(), detail: file };
+    try {
+      await readConfig(file);
+    } catch (error) {
+      configCheck = {
+        name: "config",
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error)
+      };
+    }
+    const checks: DoctorCheck[] = [configCheck];
     if (platform !== "win32") {
       const mode = metadata.mode & 0o777;
       checks.push({
