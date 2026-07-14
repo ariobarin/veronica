@@ -27,6 +27,8 @@ function usage(): string {
 Usage:
   veronica [path] [--name <name>] [--gateway <url>] [--allow-broad-root]
   veronica expose [path] [--name <name>] [--gateway <url>] [--allow-broad-root]
+  veronica local [path] [--name <name>] [--allow-broad-root]
+  veronica doctor [path] [--allow-broad-root]
   veronica gateway
   veronica init worker [--gateway <url>] [--name <name>] [--token-file <path>]
   veronica init gateway [--hosts <list>] [--port <port>] [--allowed-hosts <list>]
@@ -47,6 +49,8 @@ export type CliCommand =
   | { kind: "help" }
   | { kind: "gateway" }
   | { kind: "init"; args: string[] }
+  | { kind: "doctor"; args: string[] }
+  | { kind: "local"; args: string[] }
   | { kind: "expose"; args: string[] };
 
 export function parseCliCommand(args: string[]): CliCommand {
@@ -57,6 +61,8 @@ export function parseCliCommand(args: string[]): CliCommand {
     return { kind: "gateway" };
   }
   if (command === "init") return { kind: "init", args: rest };
+  if (command === "doctor") return { kind: "doctor", args: rest };
+  if (command === "local") return { kind: "local", args: rest };
   if (command === "expose") return { kind: "expose", args: rest };
   return { kind: "expose", args };
 }
@@ -101,6 +107,52 @@ export function parseExposeArgs(
 
   if (!token) throw new Error("Run `veronica init worker` or set VERONICA_TOKEN before starting a worker");
   return { root, name, gateway, token, allowBroadRoot };
+}
+
+export type LocalOptions = {
+  root?: string;
+  name: string;
+  allowBroadRoot: boolean;
+};
+
+export function parseLocalArgs(args: string[], hostname = os.hostname()): LocalOptions {
+  let root: string | undefined;
+  let name = hostname;
+  let allowBroadRoot = false;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--allow-broad-root") {
+      allowBroadRoot = true;
+      continue;
+    }
+    if (arg === "--name") {
+      const value = args[++index];
+      if (!value) throw new Error("Missing value for --name");
+      name = value;
+      continue;
+    }
+    if (arg?.startsWith("--")) throw new Error(`Unknown local option: ${arg}`);
+    if (root !== undefined) throw new Error(`Unexpected argument: ${arg}`);
+    root = arg;
+  }
+  return { root, name, allowBroadRoot };
+}
+
+export type DoctorOptions = { root?: string; allowBroadRoot: boolean };
+
+export function parseDoctorArgs(args: string[]): DoctorOptions {
+  let root: string | undefined;
+  let allowBroadRoot = false;
+  for (const arg of args) {
+    if (arg === "--allow-broad-root") {
+      allowBroadRoot = true;
+      continue;
+    }
+    if (arg.startsWith("--")) throw new Error(`Unknown doctor option: ${arg}`);
+    if (root !== undefined) throw new Error(`Unexpected argument: ${arg}`);
+    root = arg;
+  }
+  return { root, allowBroadRoot };
 }
 
 type ResolveExposeRootOptions = {
@@ -265,13 +317,21 @@ export async function initializeConfig(
   return { config, ...(generatedToken === undefined ? {} : { generatedToken }) };
 }
 
+function installStopHandlers(controller: AbortController): () => void {
+  const stop = () => controller.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  return () => {
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGTERM", stop);
+  };
+}
+
 async function expose(args: string[], config: VeronicaConfig): Promise<void> {
   const options = parseExposeArgs(args, process.env, os.hostname(), config.worker);
   const selected = await resolveExposeRoot(options.root, { allowBroadRoot: options.allowBroadRoot });
   const controller = new AbortController();
-  const stop = () => controller.abort();
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
+  const removeStopHandlers = installStopHandlers(controller);
 
   try {
     await runWorker({
@@ -283,9 +343,52 @@ async function expose(args: string[], config: VeronicaConfig): Promise<void> {
       signal: controller.signal
     });
   } finally {
-    process.removeListener("SIGINT", stop);
-    process.removeListener("SIGTERM", stop);
+    removeStopHandlers();
   }
+}
+
+async function local(args: string[]): Promise<void> {
+  const options = parseLocalArgs(args);
+  const selected = await resolveExposeRoot(options.root, { allowBroadRoot: options.allowBroadRoot });
+  const { startLocalGateway } = await import("./local.js");
+  const gateway = await startLocalGateway();
+  const controller = new AbortController();
+  const removeStopHandlers = installStopHandlers(controller);
+  console.error(`Veronica local MCP endpoint: ${gateway.mcpUrl}`);
+
+  try {
+    await runWorker({
+      root: selected.root,
+      rootLabel: selected.label,
+      name: options.name,
+      gateway: gateway.gatewayUrl,
+      token: gateway.token,
+      signal: controller.signal
+    });
+  } finally {
+    controller.abort();
+    removeStopHandlers();
+    await gateway.close();
+  }
+}
+
+async function doctor(args: string[], config: VeronicaConfig): Promise<void> {
+  const options = parseDoctorArgs(args);
+  const selected = await resolveExposeRoot(options.root, { allowBroadRoot: options.allowBroadRoot });
+  const gateway = process.env.VERONICA_GATEWAY ?? config.worker?.gateway ?? DEFAULT_GATEWAY;
+  const workerToken = process.env.VERONICA_TOKEN ?? config.worker?.token;
+  const configPath = resolveConfigPath();
+  const { formatDoctorChecks, runDoctor } = await import("./doctor.js");
+  const { resolveListenHosts } = await import("./server.js");
+  const checks = await runDoctor({
+    configPath,
+    root: selected.root,
+    gateway,
+    gatewayHosts: resolveListenHosts(process.env, config.gateway),
+    workerToken
+  });
+  console.log(formatDoctorChecks(checks));
+  if (checks.some(check => !check.ok)) process.exitCode = 1;
 }
 
 export async function main(args = process.argv.slice(2)): Promise<void> {
@@ -301,11 +404,19 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     if (result.generatedToken) console.log(`VERONICA_TOKEN=${result.generatedToken}`);
     return;
   }
+  if (command.kind === "local") {
+    await local(command.args);
+    return;
+  }
 
   const config = await readConfig();
   if (command.kind === "gateway") {
     const { startServer } = await import("./server.js");
     startServer({ config: config.gateway });
+    return;
+  }
+  if (command.kind === "doctor") {
+    await doctor(command.args, config);
     return;
   }
   await expose(command.args, config);
