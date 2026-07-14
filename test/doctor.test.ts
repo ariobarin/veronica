@@ -47,6 +47,40 @@ test("doctor verifies a healthy private worker path", async t => {
   assert.match(formatDoctorChecks(checks), /✓ worker authentication: token accepted/);
 });
 
+test("doctor probes the saved gateway port when no worker URL is configured", async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "veronica-doctor-port-"));
+  const configPath = path.join(directory, "config.json");
+  const root = path.join(directory, "repo");
+  const requested: URL[] = [];
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(root);
+  await writeFile(
+    configPath,
+    `${JSON.stringify({ gateway: { deviceToken: "d".repeat(32), hosts: ["127.0.0.1"], port: 43123 } })}\n`,
+    { mode: 0o600 }
+  );
+
+  const fetcher: typeof fetch = async input => {
+    const url = requestUrl(input);
+    requested.push(url);
+    if (url.pathname === "/healthz") return Response.json({ ok: true, service: "veronica" });
+    return Response.json({ error: { code: "invalid_request" } }, { status: 400 });
+  };
+  const checks = await runDoctor({
+    configPath,
+    root,
+    gateway: "http://127.0.0.1:39100",
+    gatewayHosts: ["127.0.0.1"],
+    workerToken: "d".repeat(32),
+    environment: {},
+    fetcher
+  });
+
+  assert.equal(checks.every(check => check.ok), true);
+  assert.equal(requested.length, 2);
+  assert.deepEqual(requested.map(url => url.port), ["43123", "43123"]);
+});
+
 test("doctor exposes unsafe listeners, missing credentials, and failed health", async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "veronica-doctor-fail-"));
   const root = path.join(directory, "repo");
