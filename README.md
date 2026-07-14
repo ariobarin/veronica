@@ -73,6 +73,27 @@ veronica
 
 The worker prints the canonical exposed root before connecting. Stop it with `Ctrl+C`.
 
+## Diagnose setup
+
+Run the diagnostic command from the workspace you intend to expose:
+
+```bash
+veronica doctor
+```
+
+It checks the Node.js version, configuration-file permissions, selected workspace root, gateway listener configuration, health endpoint, and whether the worker token is accepted by the private gateway. It exits nonzero when any check fails. Pass a directory explicitly when running outside a Git worktree.
+
+## Try Veronica locally
+
+For a loopback-only trial without saved gateway or worker credentials:
+
+```bash
+cd "$HOME/code/project"
+veronica local
+```
+
+This starts an ephemeral gateway on `127.0.0.1`, exposes the current Git worktree, and prints its local MCP URL. Connect a local MCP client to that URL and stop both components with `Ctrl+C`. Local mode is for evaluation and development; it does not replace the access-controlled production transport.
+
 ## Use the MCP tools
 
 Connect an MCP client through the trusted transport to:

@@ -23,7 +23,7 @@ The harness owns the model, conversation, reasoning, tool scheduling, retries, a
 
 ### Trusted transport
 
-Veronica does not authenticate MCP clients. An authenticated private tunnel, VPN, mutually authenticated proxy, or equivalent operator-controlled transport must decide which clients can reach `/mcp`. The gateway treats every request that reaches that endpoint as trusted.
+Veronica does not authenticate MCP clients. An authenticated private tunnel, VPN, mutually authenticated proxy, or equivalent operator-controlled transport must decide which clients can reach a production `/mcp` endpoint. The gateway treats every request that reaches that endpoint as trusted.
 
 ### Gateway
 
@@ -44,6 +44,25 @@ MCP clients and private workers have separate boundaries. Client admission happe
 ### Worker
 
 `veronica expose` canonicalizes one local root, registers a device name, and repeatedly long-polls for one job. It validates paths and executes jobs locally. The worker makes only outbound HTTP requests.
+
+### Local mode
+
+`veronica local` combines the gateway and worker lifecycle for development and evaluation:
+
+```text
+local MCP client -> http://127.0.0.1:<ephemeral>/mcp
+                        |
+                        v
+              ephemeral Veronica gateway
+                        |
+                        | random in-memory device token over loopback
+                        v
+              selected local Git worktree
+```
+
+The command creates a random worker token, starts the gateway on an operating-system-assigned IPv4 loopback port, starts a worker against the selected root, and closes both when interrupted. It does not read or write the saved gateway and worker credentials.
+
+Local mode preserves the normal workspace, path, file-revision, command, timeout, and process-tree enforcement. It changes only the routing and lifecycle. Its `/mcp` endpoint is still unauthenticated, so loopback reachability is the only client boundary; any local process that can connect to the port is trusted. It is not a remote deployment mode and must not be forwarded or tunneled.
 
 ## Resource model
 
@@ -104,6 +123,8 @@ Long polling works through NAT and ordinary reverse proxies, requires no inbound
 - If a device reconnects under a stale name, old workspaces for that device are removed.
 - Command output is capped at 1 MiB and returned only when the process exits.
 - Command timeouts terminate the operating system process group plus discovered descendants and report `timedOut` in the completed result. Stopping the worker applies the same termination path before the worker exits.
+- If local mode cannot bind loopback, it closes the partial listener and exits without starting a worker.
+- Stopping local mode aborts the worker before closing its ephemeral gateway.
 
 ## Growth order
 
