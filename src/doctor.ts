@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { readConfig } from "./config.js";
 
 export type DoctorCheck = {
   name: string;
@@ -15,6 +16,7 @@ export type DoctorOptions = {
   workerToken?: string;
   nodeVersion?: string;
   platform?: NodeJS.Platform;
+  environment?: NodeJS.ProcessEnv;
   fetcher?: typeof fetch;
 };
 
@@ -105,14 +107,32 @@ async function workerAuthenticationCheck(
   }
 }
 
-function listenerCheck(hosts: string[] | undefined): DoctorCheck {
-  if (hosts === undefined) {
+async function listenerCheck(options: DoctorOptions): Promise<DoctorCheck> {
+  const environment = options.environment ?? process.env;
+  const configuredByEnvironment = environment.VERONICA_HOSTS !== undefined || environment.HOSTS !== undefined;
+  let configuredByFile = false;
+  if (!configuredByEnvironment) {
+    try {
+      configuredByFile = (await readConfig(options.configPath)).gateway?.hosts !== undefined;
+    } catch (error) {
+      return {
+        name: "gateway listeners",
+        ok: false,
+        detail: `cannot inspect gateway configuration: ${error instanceof Error ? error.message : String(error)}`
+      };
+    }
+  }
+  if (!configuredByEnvironment && !configuredByFile) {
     return {
       name: "gateway listeners",
       ok: true,
       skipped: true,
       detail: "not configured on this machine; inspect the gateway host"
     };
+  }
+  const hosts = options.gatewayHosts;
+  if (!hosts || hosts.length === 0) {
+    return { name: "gateway listeners", ok: false, detail: "configured listener addresses could not be resolved" };
   }
   return {
     name: "gateway listeners",
@@ -133,7 +153,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorCheck[]> 
     },
     ...(await configChecks(options.configPath, options.platform ?? process.platform)),
     { name: "workspace root", ok: rootMetadata.isDirectory(), detail: options.root },
-    listenerCheck(options.gatewayHosts)
+    await listenerCheck(options)
   ];
   checks.push(await healthCheck(options.gateway, fetcher));
   checks.push(await workerAuthenticationCheck(options.gateway, options.workerToken, fetcher));
