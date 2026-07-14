@@ -191,7 +191,7 @@ test("direct argv execution preserves arguments and standard input", async t => 
     const batchResult = (await executeWorkerRequest(root, {
       type: "run_command",
       workspace: ".",
-      argv: ["npm.cmd", "--version"],
+      argv: ["npm", "--version"],
       timeoutSeconds: 10
     })) as {
       exitCode: number | null;

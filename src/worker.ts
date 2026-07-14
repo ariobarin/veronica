@@ -75,15 +75,20 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-function resolveWindowsBatchFile(cwd: string, file: string): string {
-  if (path.isAbsolute(file)) return file;
-  if (file.includes("/") || file.includes("\\")) return path.resolve(cwd, file);
-  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
-    if (!directory) continue;
-    const candidate = path.join(directory, file);
-    if (existsSync(candidate)) return candidate;
-  }
-  return file;
+function resolveWindowsCommand(cwd: string, file: string): string {
+  const extensions = path.extname(file)
+    ? [""]
+    : (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  const names = extensions.map(extension => `${file}${extension}`);
+  const candidates = path.isAbsolute(file)
+    ? names
+    : file.includes("/") || file.includes("\\")
+      ? names.map(name => path.resolve(cwd, name))
+      : (process.env.PATH ?? "")
+          .split(path.delimiter)
+          .filter(Boolean)
+          .flatMap(directory => names.map(name => path.join(directory, name)));
+  return candidates.find(candidate => existsSync(candidate)) ?? file;
 }
 
 function quoteWindowsBatchArgument(value: string): string {
@@ -103,14 +108,17 @@ function commandInvocation(
   if (request.argv) {
     const [file, ...args] = request.argv;
     if (!file) throw new VeronicaError("invalid_request", "argv must contain an executable");
-    if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(file)) {
-      const batchFile = resolveWindowsBatchFile(cwd, file);
-      const command = [batchFile, ...args].map(quoteWindowsBatchArgument).join(" ");
-      return {
-        file: process.env.ComSpec ?? "cmd.exe",
-        args: ["/d", "/s", "/c", `call ${command}`],
-        windowsVerbatimArguments: true
-      };
+    if (process.platform === "win32") {
+      const resolvedFile = resolveWindowsCommand(cwd, file);
+      if (/\.(?:cmd|bat)$/i.test(resolvedFile)) {
+        const command = [resolvedFile, ...args].map(quoteWindowsBatchArgument).join(" ");
+        return {
+          file: process.env.ComSpec ?? "cmd.exe",
+          args: ["/d", "/s", "/c", `call ${command}`],
+          windowsVerbatimArguments: true
+        };
+      }
+      return { file: resolvedFile, args };
     }
     return { file, args };
   }
@@ -124,19 +132,29 @@ function commandInvocation(
   return { file: "/bin/sh", args: ["-c", request.shellCommand] };
 }
 
-function terminateProcessTree(pid: number | undefined): void {
+async function terminateProcessTree(pid: number | undefined): Promise<void> {
   if (!pid) return;
   if (process.platform === "win32") {
-    const killer = spawn("taskkill.exe", ["/pid", String(pid), "/t", "/f"], {
-      windowsHide: true,
-      stdio: "ignore"
-    });
-    killer.on("error", () => {
-      try {
-        process.kill(pid);
-      } catch {
-        // The process already exited.
-      }
+    await new Promise<void>(resolve => {
+      const killer = spawn("taskkill.exe", ["/pid", String(pid), "/t", "/f"], {
+        windowsHide: true,
+        stdio: "ignore"
+      });
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      killer.on("error", () => {
+        try {
+          process.kill(pid);
+        } catch {
+          // The process already exited.
+        }
+        finish();
+      });
+      killer.on("close", finish);
     });
     return;
   }
@@ -187,6 +205,8 @@ async function runCommand(cwd: string, request: RunCommandRequest) {
     let truncated = false;
     let timedOut = false;
     let settled = false;
+    let termination: Promise<void> | undefined;
+    let timer: NodeJS.Timeout | undefined;
 
     const capture = (chunk: Buffer, target: Buffer[]) => {
       const remaining = MAX_TEXT_BYTES - capturedBytes;
@@ -200,10 +220,11 @@ async function runCommand(cwd: string, request: RunCommandRequest) {
       if (accepted.length !== chunk.length) truncated = true;
     };
 
-    const finish = (exitCode: number | null, signal: NodeJS.Signals | null, spawnError: string | null) => {
+    const finish = async (exitCode: number | null, signal: NodeJS.Signals | null, spawnError: string | null) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
+      if (termination) await termination;
       resolve({
         exitCode,
         signal,
@@ -218,15 +239,15 @@ async function runCommand(cwd: string, request: RunCommandRequest) {
     child.stdout.on("data", (chunk: Buffer) => capture(chunk, stdout));
     child.stderr.on("data", (chunk: Buffer) => capture(chunk, stderr));
     child.stdin.on("error", () => undefined);
-    child.on("error", error => finish(null, null, error.message));
-    child.on("close", (exitCode, signal) => finish(exitCode, signal, null));
+    child.on("error", error => void finish(null, null, error.message));
+    child.on("close", (exitCode, signal) => void finish(exitCode, signal, null));
 
     if (request.stdin === undefined) child.stdin.end();
     else child.stdin.end(request.stdin, "utf8");
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       timedOut = true;
-      terminateProcessTree(child.pid);
+      termination = terminateProcessTree(child.pid);
     }, (request.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS) * 1000);
   });
 }
