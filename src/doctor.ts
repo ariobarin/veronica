@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 export type DoctorCheck = {
   name: string;
   ok: boolean;
+  skipped?: boolean;
   detail: string;
 };
 
@@ -10,7 +11,7 @@ export type DoctorOptions = {
   configPath: string;
   root: string;
   gateway: string;
-  gatewayHosts: string[];
+  gatewayHosts?: string[];
   workerToken?: string;
   nodeVersion?: string;
   platform?: NodeJS.Platform;
@@ -33,7 +34,7 @@ async function configChecks(file: string, platform: NodeJS.Platform): Promise<Do
   } catch (error) {
     const code = error instanceof Error && "code" in error ? String(error.code) : undefined;
     if (code === "ENOENT") {
-      return [{ name: "config", ok: true, detail: `not present at ${file}; using environment/defaults` }];
+      return [{ name: "config", ok: true, skipped: true, detail: `not present at ${file}; using environment/defaults` }];
     }
     return [{ name: "config", ok: false, detail: error instanceof Error ? error.message : String(error) }];
   }
@@ -104,6 +105,22 @@ async function workerAuthenticationCheck(
   }
 }
 
+function listenerCheck(hosts: string[] | undefined): DoctorCheck {
+  if (hosts === undefined) {
+    return {
+      name: "gateway listeners",
+      ok: true,
+      skipped: true,
+      detail: "not configured on this machine; inspect the gateway host"
+    };
+  }
+  return {
+    name: "gateway listeners",
+    ok: hosts.every(host => host !== "0.0.0.0" && host !== "::" && host !== "[::]"),
+    detail: hosts.join(", ")
+  };
+}
+
 export async function runDoctor(options: DoctorOptions): Promise<DoctorCheck[]> {
   const major = Number.parseInt((options.nodeVersion ?? process.versions.node).split(".")[0] ?? "0", 10);
   const rootMetadata = await stat(options.root);
@@ -116,11 +133,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorCheck[]> 
     },
     ...(await configChecks(options.configPath, options.platform ?? process.platform)),
     { name: "workspace root", ok: rootMetadata.isDirectory(), detail: options.root },
-    {
-      name: "gateway listeners",
-      ok: options.gatewayHosts.every(host => host !== "0.0.0.0" && host !== "::" && host !== "[::]"),
-      detail: options.gatewayHosts.join(", ")
-    }
+    listenerCheck(options.gatewayHosts)
   ];
   checks.push(await healthCheck(options.gateway, fetcher));
   checks.push(await workerAuthenticationCheck(options.gateway, options.workerToken, fetcher));
@@ -128,5 +141,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorCheck[]> 
 }
 
 export function formatDoctorChecks(checks: DoctorCheck[]): string {
-  return checks.map(check => `${check.ok ? "✓" : "✗"} ${check.name}: ${check.detail}`).join("\n");
+  return checks
+    .map(check => `${check.skipped ? "-" : check.ok ? "✓" : "✗"} ${check.name}: ${check.detail}`)
+    .join("\n");
 }
