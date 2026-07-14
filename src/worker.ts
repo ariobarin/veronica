@@ -1,12 +1,16 @@
+import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod/v4";
 import {
   DEFAULT_COMMAND_TIMEOUT_SECONDS,
   deviceJobSchema,
   MAX_TEXT_BYTES,
+  toWorkerError,
+  VeronicaError,
+  type DeviceJob,
   type WorkerRequest,
   type WorkerResult
 } from "./protocol.js";
@@ -128,34 +132,97 @@ async function runCommand(cwd: string, command: string, timeoutSeconds: number) 
   });
 }
 
+function sha256(value: Buffer | string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+async function readTextFile(file: string): Promise<{ content: string; sha256: string }> {
+  const metadata = await stat(file);
+  if (!metadata.isFile()) throw new VeronicaError("invalid_request", "Requested path is not a file");
+  if (metadata.size > MAX_TEXT_BYTES) throw new VeronicaError("invalid_request", "File exceeds the 1 MiB limit");
+  const bytes = await readFile(file);
+  if (bytes.length > MAX_TEXT_BYTES) throw new VeronicaError("invalid_request", "File exceeds the 1 MiB limit");
+  return { content: bytes.toString("utf8"), sha256: sha256(bytes) };
+}
+
+async function assertExpectedHash(file: string, expectedSha256: string): Promise<void> {
+  let metadata;
+  try {
+    metadata = await stat(file);
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String(error.code) : undefined;
+    if (code === "ENOENT") throw new VeronicaError("conflict", "File does not exist at the expected revision");
+    throw error;
+  }
+  if (!metadata.isFile()) throw new VeronicaError("invalid_request", "Expected revision path is not a file");
+  if (metadata.size > MAX_TEXT_BYTES) throw new VeronicaError("invalid_request", "File exceeds the 1 MiB limit");
+
+  let current: Buffer;
+  try {
+    current = await readFile(file);
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String(error.code) : undefined;
+    if (code === "ENOENT") throw new VeronicaError("conflict", "File does not exist at the expected revision");
+    throw error;
+  }
+  if (current.length > MAX_TEXT_BYTES) throw new VeronicaError("invalid_request", "File exceeds the 1 MiB limit");
+  if (sha256(current) !== expectedSha256) {
+    throw new VeronicaError("conflict", "File changed since it was read");
+  }
+}
+
+async function replaceFileAtomically(file: string, content: string): Promise<void> {
+  const temporary = path.join(path.dirname(file), `.veronica-${randomUUID()}.tmp`);
+  let existingMode: number | undefined;
+  try {
+    const existing = await open(file, "r+");
+    try {
+      existingMode = (await existing.stat()).mode;
+    } finally {
+      await existing.close();
+    }
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String(error.code) : undefined;
+    if (code !== "ENOENT") throw error;
+  }
+
+  try {
+    await writeFile(temporary, content, { encoding: "utf8", flag: "wx", mode: existingMode });
+    if (existingMode !== undefined && process.platform !== "win32") await chmod(temporary, existingMode);
+    await rename(temporary, file);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
 export async function executeWorkerRequest(root: string, request: WorkerRequest): Promise<unknown> {
   if (request.type === "open_workspace") {
     const workspace = await resolveExistingPath(root, request.path);
     const metadata = await stat(workspace);
-    if (!metadata.isDirectory()) throw new Error("Workspace path must be a directory");
+    if (!metadata.isDirectory()) throw new VeronicaError("invalid_request", "Workspace path must be a directory");
     return { path: request.path };
   }
 
   const workspace = await resolveExistingPath(root, request.workspace);
   const workspaceMetadata = await stat(workspace);
-  if (!workspaceMetadata.isDirectory()) throw new Error("Workspace is no longer a directory");
+  if (!workspaceMetadata.isDirectory()) {
+    throw new VeronicaError("invalid_request", "Workspace is no longer a directory");
+  }
 
   if (request.type === "read_file") {
     const file = await resolveExistingPath(workspace, request.path);
-    const metadata = await stat(file);
-    if (!metadata.isFile()) throw new Error("Requested path is not a file");
-    if (metadata.size > MAX_TEXT_BYTES) throw new Error("File exceeds the 1 MiB prototype limit");
-    return { content: await readFile(file, "utf8") };
+    return await readTextFile(file);
   }
 
   if (request.type === "write_file") {
-    if (Buffer.byteLength(request.content, "utf8") > MAX_TEXT_BYTES) {
-      throw new Error("Content exceeds the 1 MiB prototype limit");
-    }
     const file = await resolveWritePath(workspace, request.path);
+    if (request.expectedSha256) await assertExpectedHash(file, request.expectedSha256);
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, request.content, "utf8");
-    return { bytesWritten: Buffer.byteLength(request.content, "utf8") };
+    await replaceFileAtomically(file, request.content);
+    return {
+      bytesWritten: Buffer.byteLength(request.content, "utf8"),
+      sha256: sha256(request.content)
+    };
   }
 
   return await runCommand(
@@ -163,6 +230,14 @@ export async function executeWorkerRequest(root: string, request: WorkerRequest)
     request.command,
     request.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS
   );
+}
+
+export async function executeDeviceJob(root: string, job: DeviceJob): Promise<WorkerResult> {
+  try {
+    return { ok: true, value: await executeWorkerRequest(root, job.request) };
+  } catch (error) {
+    return { ok: false, error: toWorkerError(error) };
+  }
 }
 
 function errorMessage(error: unknown): string {
@@ -210,13 +285,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
       );
 
       if (!polled.job) continue;
-
-      let result: WorkerResult;
-      try {
-        result = { ok: true, value: await executeWorkerRequest(root, polled.job.request) };
-      } catch (error) {
-        result = { ok: false, error: errorMessage(error) };
-      }
+      const result = await executeDeviceJob(root, polled.job);
 
       await postJson(
         options.gateway,

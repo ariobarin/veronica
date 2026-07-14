@@ -61,7 +61,7 @@ Opening a workspace asks the worker to verify that the directory exists. Every l
 
 ### Job
 
-A job is one request routed to one device. The gateway waits for the worker to return either a value or an error. Timed-out jobs are discarded.
+A job is one request routed to one device. The gateway removes work that is still queued when its caller times out. Work already delivered to a worker may continue because cancellation is not yet implemented; any result returned after the caller timeout is ignored.
 
 ## Current protocol
 
@@ -74,7 +74,7 @@ write_file
 run_command
 ```
 
-The MCP gateway adds discovery and lease management around those operations:
+File reads return a SHA-256 revision. File writes replace content atomically and may require an expected revision to detect stale edits. The MCP gateway adds discovery and lease management around those operations:
 
 ```text
 list_devices
@@ -94,6 +94,7 @@ Long polling works through NAT and ordinary reverse proxies, requires no inbound
 - If the gateway restarts, workers receive an unknown-device response and register again.
 - If a worker disappears, queued MCP calls eventually time out.
 - If an MCP client disconnects, the current prototype does not cancel a worker job.
+- A queued job is removed when its caller times out. A command that already started is not yet cancelled by a gateway timeout.
 - If a device reconnects under a stale name, old workspaces for that device are removed.
 - Command output is capped at 1 MiB and returned only when the process exits.
 

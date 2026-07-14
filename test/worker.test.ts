@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, chmod, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { canonicalizeRoot } from "../src/path-policy.js";
 import { executeWorkerRequest } from "../src/worker.js";
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 test("worker executes file and command requests inside a workspace", async t => {
   const rootInput = await mkdtemp(path.join(os.tmpdir(), "veronica-worker-"));
@@ -15,7 +20,7 @@ test("worker executes file and command requests inside a workspace", async t => 
   assert.deepEqual(await executeWorkerRequest(root, { type: "open_workspace", path: "." }), { path: "." });
   assert.deepEqual(
     await executeWorkerRequest(root, { type: "read_file", workspace: ".", path: "README.md" }),
-    { content: "hello" }
+    { content: "hello", sha256: sha256("hello") }
   );
   assert.deepEqual(
     await executeWorkerRequest(root, {
@@ -24,9 +29,106 @@ test("worker executes file and command requests inside a workspace", async t => 
       path: "src/new.txt",
       content: "written"
     }),
-    { bytesWritten: 7 }
+    { bytesWritten: 7, sha256: sha256("written") }
   );
   assert.equal(await readFile(path.join(root, "src", "new.txt"), "utf8"), "written");
+
+  assert.deepEqual(
+    await executeWorkerRequest(root, {
+      type: "write_file",
+      workspace: ".",
+      path: "README.md",
+      content: "updated",
+      expectedSha256: sha256("hello")
+    }),
+    { bytesWritten: 7, sha256: sha256("updated") }
+  );
+  await assert.rejects(
+    executeWorkerRequest(root, {
+      type: "write_file",
+      workspace: ".",
+      path: "README.md",
+      content: "stale overwrite",
+      expectedSha256: sha256("hello")
+    }),
+    error => error instanceof Error && "code" in error && error.code === "conflict"
+  );
+  assert.equal(await readFile(path.join(root, "README.md"), "utf8"), "updated");
+  assert.equal((await readdir(root)).some(entry => entry.endsWith(".tmp")), false);
+
+  await assert.rejects(
+    executeWorkerRequest(root, {
+      type: "write_file",
+      workspace: ".",
+      path: "missing/guarded.txt",
+      content: "replacement",
+      expectedSha256: sha256("missing")
+    }),
+    error => error instanceof Error && "code" in error && error.code === "conflict"
+  );
+  await assert.rejects(
+    access(path.join(root, "missing")),
+    error => error instanceof Error && "code" in error && error.code === "ENOENT"
+  );
+
+  const largeFile = path.join(root, "large.txt");
+  await writeFile(largeFile, "x".repeat(1024 * 1024 + 1), "utf8");
+  await assert.rejects(
+    executeWorkerRequest(root, {
+      type: "write_file",
+      workspace: ".",
+      path: "large.txt",
+      content: "replacement",
+      expectedSha256: sha256("irrelevant")
+    }),
+    error =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "invalid_request" &&
+      /exceeds the 1 MiB limit/.test(error.message)
+  );
+  assert.equal((await stat(largeFile)).size, 1024 * 1024 + 1);
+
+  const longName = `${"x".repeat(220)}.txt`;
+  await executeWorkerRequest(root, {
+    type: "write_file",
+    workspace: ".",
+    path: longName,
+    content: "long name"
+  });
+  assert.equal(await readFile(path.join(root, longName), "utf8"), "long name");
+
+  if (process.platform !== "win32") {
+    const executable = path.join(root, "script.sh");
+    await writeFile(executable, "#!/bin/sh\n", "utf8");
+    await chmod(executable, 0o751);
+    await executeWorkerRequest(root, {
+      type: "write_file",
+      workspace: ".",
+      path: "script.sh",
+      content: "#!/bin/sh\nprintf preserved\n"
+    });
+    assert.equal((await stat(executable)).mode & 0o777, 0o751);
+
+    if (process.getuid?.() !== 0) {
+      const readOnly = path.join(root, "read-only.txt");
+      await writeFile(readOnly, "original", "utf8");
+      await chmod(readOnly, 0o444);
+      await assert.rejects(
+        executeWorkerRequest(root, {
+          type: "write_file",
+          workspace: ".",
+          path: "read-only.txt",
+          content: "replacement"
+        }),
+        error =>
+          error instanceof Error &&
+          "code" in error &&
+          (error.code === "EACCES" || error.code === "EPERM")
+      );
+      assert.equal(await readFile(readOnly, "utf8"), "original");
+    }
+  }
 
   const command = (await executeWorkerRequest(root, {
     type: "run_command",
@@ -46,3 +148,4 @@ test("worker executes file and command requests inside a workspace", async t => 
   assert.equal(command.truncated, false);
   assert.equal(command.timedOut, false);
 });
+

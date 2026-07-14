@@ -14,10 +14,13 @@ test("path policy keeps access inside the exposed root", async t => {
   });
 
   await mkdir(path.join(rootInput, "repo"));
+  await mkdir(path.join(rootInput, "..cache"));
   await writeFile(path.join(rootInput, "repo", "README.md"), "hello", "utf8");
+  await writeFile(path.join(rootInput, "..cache", "state.txt"), "valid", "utf8");
   const root = await canonicalizeRoot(rootInput);
 
   assert.equal(await resolveExistingPath(root, "repo/README.md"), path.join(root, "repo", "README.md"));
+  assert.equal(await resolveExistingPath(root, "..cache/state.txt"), path.join(root, "..cache", "state.txt"));
   assert.equal(await resolveWritePath(root, "repo/src/new.ts"), path.join(root, "repo", "src", "new.ts"));
   await assert.rejects(resolveExistingPath(root, "../outside"), /escapes the exposed root/);
   await assert.rejects(resolveWritePath(root, "../outside.txt"), /escapes the exposed root/);
