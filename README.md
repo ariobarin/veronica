@@ -85,6 +85,8 @@ Call `list_devices` only when device selection is ambiguous. Device results incl
 - `argv`, for direct execution without host-shell quoting
 - `shell_command`, for explicit `cmd.exe` on Windows or `/bin/sh` elsewhere
 
+The deprecated `command` field remains an alias for `shell_command` so connectors that cached the original MCP schema continue to work. New integrations should use `argv` or `shell_command`.
+
 It also accepts optional standard input and reports spawn errors, output truncation, and timeouts in structured fields.
 
 ## Design and operations

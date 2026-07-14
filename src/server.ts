@@ -59,6 +59,34 @@ function errorResult(error: unknown) {
   };
 }
 
+export function parseMcpCommandInvocation(input: {
+  argv?: string[];
+  shellCommand?: string;
+  command?: string;
+  stdin?: string;
+}) {
+  const invocationCount =
+    Number(input.argv !== undefined) +
+    Number(input.shellCommand !== undefined) +
+    Number(input.command !== undefined);
+  if (invocationCount !== 1) {
+    throw new VeronicaError("invalid_request", "Provide exactly one of argv, shell_command, or command");
+  }
+
+  const parsed = commandInvocationSchema.safeParse({
+    argv: input.argv,
+    shellCommand: input.shellCommand ?? input.command,
+    stdin: input.stdin
+  });
+  if (!parsed.success) {
+    throw new VeronicaError(
+      "invalid_request",
+      parsed.error.issues[0]?.message ?? "Invalid command invocation"
+    );
+  }
+  return parsed.data;
+}
+
 export function createVeronicaMcpServer(broker: Broker): McpServer {
   const server = new McpServer(
     { name: "veronica", version: "0.0.0" },
@@ -180,6 +208,9 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
         workspace_id: z.string().uuid(),
         argv: argvSchema.optional(),
         shell_command: commandSchema.optional(),
+        command: commandSchema
+          .optional()
+          .describe("Deprecated alias for shell_command retained for existing MCP connectors."),
         stdin: textContentSchema.optional(),
         timeout_seconds: timeoutSecondsSchema.default(DEFAULT_COMMAND_TIMEOUT_SECONDS)
       },
@@ -195,23 +226,18 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
       workspace_id: workspaceId,
       argv,
       shell_command: shellCommand,
+      command,
       stdin,
       timeout_seconds: timeoutSeconds
     }) => {
       try {
-        const parsedInvocation = commandInvocationSchema.safeParse({ argv, shellCommand, stdin });
-        if (!parsedInvocation.success) {
-          throw new VeronicaError(
-            "invalid_request",
-            parsedInvocation.error.issues[0]?.message ?? "Invalid command invocation"
-          );
-        }
+        const parsedInvocation = parseMcpCommandInvocation({ argv, shellCommand, command, stdin });
         const result = await broker.executeInWorkspace(
           workspaceId,
           workspace => ({
             type: "run_command",
             workspace,
-            ...parsedInvocation.data,
+            ...parsedInvocation,
             timeoutSeconds
           }),
           (timeoutSeconds + 10) * 1000

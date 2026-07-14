@@ -6,7 +6,22 @@ import { pathToFileURL } from "node:url";
 import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { resolveOAuthConfig } from "../src/auth.js";
-import { createGatewayApp, isMainModule, resolveListenHosts } from "../src/server.js";
+import {
+  createGatewayApp,
+  isMainModule,
+  parseMcpCommandInvocation,
+  resolveListenHosts
+} from "../src/server.js";
+
+test("legacy MCP command input maps to an explicit shell command", () => {
+  const invocation = parseMcpCommandInvocation({ command: "dir" });
+  assert.equal(invocation.shellCommand, "dir");
+  assert.equal(invocation.argv, undefined);
+  assert.throws(
+    () => parseMcpCommandInvocation({ command: "dir", shellCommand: "pwd" }),
+    /Provide exactly one/
+  );
+});
 
 test("server starts when the entrypoint resolves through a release symlink", () => {
   const symlinkPath = path.resolve("/opt/veronica/current/dist/server.js");
