@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -32,7 +32,20 @@ test("config round trips through a protected atomic file", async t => {
   await writeConfig(config, file);
   assert.deepEqual(await readConfig(file), config);
   assert.equal((await readFile(file, "utf8")).endsWith("\n"), true);
-  if (process.platform !== "win32") assert.equal((await stat(file)).mode & 0o777, 0o600);
+  if (process.platform !== "win32") {
+    assert.equal((await stat(path.dirname(file))).mode & 0o777, 0o700);
+    assert.equal((await stat(file)).mode & 0o777, 0o600);
+  }
+});
+
+test("config writes do not change an existing directory mode", async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "veronica-config-parent-"));
+  const file = path.join(directory, "config.json");
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  if (process.platform !== "win32") await chmod(directory, 0o755);
+
+  await writeConfig({ worker: { token: "secret" } }, file);
+  if (process.platform !== "win32") assert.equal((await stat(directory)).mode & 0o777, 0o755);
 });
 
 test("missing config is empty and malformed config is rejected", async t => {
