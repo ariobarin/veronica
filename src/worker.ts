@@ -169,14 +169,16 @@ async function terminateProcessTree(pid: number | undefined): Promise<void> {
     }
   }
 
-  const force = setTimeout(() => {
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch {
-      // The process group already exited.
-    }
-  }, 500);
-  force.unref();
+  await new Promise<void>(resolve => {
+    setTimeout(() => {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // The process group already exited.
+      }
+      resolve();
+    }, 500);
+  });
 }
 
 async function runCommand(cwd: string, request: RunCommandRequest) {

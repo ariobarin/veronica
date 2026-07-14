@@ -229,13 +229,17 @@ test("command timeout terminates descendant processes", async t => {
   t.after(() => rm(rootInput, { recursive: true, force: true }));
   const root = await canonicalizeRoot(rootInput);
   const marker = path.join(root, "descendant-survived.txt");
-  const childCode = `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(marker)}, "alive"), 2000)`;
+  const markerWrite = `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(marker)}, "alive"), 2000)`;
+  const childCode = process.platform === "win32"
+    ? markerWrite
+    : `process.on("SIGTERM", () => {});${markerWrite};setTimeout(() => {}, 10000)`;
   const parentCode = [
     'const { spawn } = require("node:child_process")',
     `spawn(process.execPath, ["-e", ${JSON.stringify(childCode)}], { stdio: "ignore" })`,
     "setTimeout(() => {}, 10000)"
   ].join(";");
 
+  const startedAt = Date.now();
   const result = (await executeWorkerRequest(root, {
     type: "run_command",
     workspace: ".",
@@ -247,6 +251,7 @@ test("command timeout terminates descendant processes", async t => {
   };
   assert.equal(result.timedOut, true);
   assert.equal(result.spawnError, null);
+  if (process.platform !== "win32") assert.ok(Date.now() - startedAt >= 1_400);
   await new Promise(resolve => setTimeout(resolve, 2500));
   await assert.rejects(access(marker), error => error instanceof Error && "code" in error && error.code === "ENOENT");
 });
