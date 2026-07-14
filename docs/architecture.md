@@ -97,7 +97,7 @@ Long polling works through NAT and ordinary reverse proxies, requires no inbound
 - A queued job is removed when its caller times out. A command that already started is not yet cancelled by a gateway timeout.
 - If a device reconnects under a stale name, old workspaces for that device are removed.
 - Command output is capped at 1 MiB and returned only when the process exits.
-- Command timeouts terminate the operating system process tree and report `timedOut` in the completed result.
+- Command timeouts terminate the operating system process tree and report `timedOut` in the completed result. Stopping the worker terminates its active command tree before the worker exits.
 
 ## Growth order
 

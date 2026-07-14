@@ -181,7 +181,7 @@ async function terminateProcessTree(pid: number | undefined): Promise<void> {
   });
 }
 
-async function runCommand(cwd: string, request: RunCommandRequest) {
+async function runCommand(cwd: string, request: RunCommandRequest, signal?: AbortSignal) {
   const invocation = commandInvocation(cwd, request);
   return await new Promise<{
     exitCode: number | null;
@@ -210,6 +210,16 @@ async function runCommand(cwd: string, request: RunCommandRequest) {
     let termination: Promise<void> | undefined;
     let timer: NodeJS.Timeout | undefined;
 
+    const startTermination = () => {
+      termination ??= terminateProcessTree(child.pid);
+      return termination;
+    };
+    const abort = () => {
+      void startTermination();
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+
     const capture = (chunk: Buffer, target: Buffer[]) => {
       const remaining = MAX_TEXT_BYTES - capturedBytes;
       if (remaining <= 0) {
@@ -222,14 +232,15 @@ async function runCommand(cwd: string, request: RunCommandRequest) {
       if (accepted.length !== chunk.length) truncated = true;
     };
 
-    const finish = async (exitCode: number | null, signal: NodeJS.Signals | null, spawnError: string | null) => {
+    const finish = async (exitCode: number | null, exitSignal: NodeJS.Signals | null, spawnError: string | null) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
       if (termination) await termination;
       resolve({
         exitCode,
-        signal,
+        signal: exitSignal,
         spawnError,
         stdout: Buffer.concat(stdout).toString("utf8"),
         stderr: Buffer.concat(stderr).toString("utf8"),
@@ -249,7 +260,7 @@ async function runCommand(cwd: string, request: RunCommandRequest) {
 
     timer = setTimeout(() => {
       timedOut = true;
-      termination = terminateProcessTree(child.pid);
+      void startTermination();
     }, (request.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS) * 1000);
   });
 }
@@ -317,7 +328,11 @@ async function replaceFileAtomically(file: string, content: string): Promise<voi
   }
 }
 
-export async function executeWorkerRequest(root: string, request: WorkerRequest): Promise<unknown> {
+export async function executeWorkerRequest(
+  root: string,
+  request: WorkerRequest,
+  signal?: AbortSignal
+): Promise<unknown> {
   if (request.type === "open_workspace") {
     const workspace = await resolveExistingPath(root, request.path);
     const metadata = await stat(workspace);
@@ -347,12 +362,16 @@ export async function executeWorkerRequest(root: string, request: WorkerRequest)
     };
   }
 
-  return await runCommand(workspace, request);
+  return await runCommand(workspace, request, signal);
 }
 
-export async function executeDeviceJob(root: string, job: DeviceJob): Promise<WorkerResult> {
+export async function executeDeviceJob(
+  root: string,
+  job: DeviceJob,
+  signal?: AbortSignal
+): Promise<WorkerResult> {
   try {
-    return { ok: true, value: await executeWorkerRequest(root, job.request) };
+    return { ok: true, value: await executeWorkerRequest(root, job.request, signal) };
   } catch (error) {
     return { ok: false, error: toWorkerError(error) };
   }
@@ -403,7 +422,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
       );
 
       if (!polled.job) continue;
-      const result = await executeDeviceJob(root, polled.job);
+      const result = await executeDeviceJob(root, polled.job, options.signal);
 
       await postJson(
         options.gateway,

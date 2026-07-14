@@ -224,6 +224,40 @@ test("command execution reports spawn errors without throwing", async t => {
   assert.equal(result.timedOut, false);
 });
 
+test("worker abort terminates the active command process tree", async t => {
+  const rootInput = await mkdtemp(path.join(os.tmpdir(), "veronica-abort-"));
+  t.after(() => rm(rootInput, { recursive: true, force: true }));
+  const root = await canonicalizeRoot(rootInput);
+  const marker = path.join(root, "abort-descendant-survived.txt");
+  const markerWrite = `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(marker)}, "alive"), 2000)`;
+  const childCode = process.platform === "win32"
+    ? markerWrite
+    : `process.on("SIGTERM", () => {});${markerWrite};setTimeout(() => {}, 10000)`;
+  const parentCode = [
+    'const { spawn } = require("node:child_process")',
+    `spawn(process.execPath, ["-e", ${JSON.stringify(childCode)}], { stdio: "ignore" })`,
+    "setTimeout(() => {}, 10000)"
+  ].join(";");
+  const controller = new AbortController();
+  const execution = executeWorkerRequest(
+    root,
+    {
+      type: "run_command",
+      workspace: ".",
+      argv: [process.execPath, "-e", parentCode],
+      timeoutSeconds: 10
+    },
+    controller.signal
+  ) as Promise<{ timedOut: boolean; spawnError: string | null }>;
+
+  setTimeout(() => controller.abort(), 100);
+  const result = await execution;
+  assert.equal(result.timedOut, false);
+  assert.equal(result.spawnError, null);
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  await assert.rejects(access(marker), error => error instanceof Error && "code" in error && error.code === "ENOENT");
+});
+
 test("command timeout terminates descendant processes", async t => {
   const rootInput = await mkdtemp(path.join(os.tmpdir(), "veronica-timeout-"));
   t.after(() => rm(rootInput, { recursive: true, force: true }));
