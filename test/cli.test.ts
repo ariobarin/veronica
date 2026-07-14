@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { isCliMainModule, parseCliCommand, parseExposeArgs, resolveExposeRoot } from "../src/cli.js";
+import {
+  initializeConfig,
+  isCliMainModule,
+  parseCliCommand,
+  parseExposeArgs,
+  parseInitArgs,
+  resolveExposeRoot
+} from "../src/cli.js";
 
-test("CLI routes the default, explicit, gateway, and help commands", () => {
+test("CLI routes the default, explicit, gateway, init, and help commands", () => {
   assert.deepEqual(parseCliCommand([]), { kind: "expose", args: [] });
   assert.deepEqual(parseCliCommand(["repo", "--name", "laptop"]), {
     kind: "expose",
@@ -14,6 +21,7 @@ test("CLI routes the default, explicit, gateway, and help commands", () => {
   });
   assert.deepEqual(parseCliCommand(["expose", "repo"]), { kind: "expose", args: ["repo"] });
   assert.deepEqual(parseCliCommand(["gateway"]), { kind: "gateway" });
+  assert.deepEqual(parseCliCommand(["init", "worker"]), { kind: "init", args: ["worker"] });
   assert.deepEqual(parseCliCommand(["--help"]), { kind: "help" });
   assert.deepEqual(parseCliCommand(["help"]), { kind: "help" });
   assert.throws(() => parseCliCommand(["gateway", "extra"]), /Unexpected gateway argument/);
@@ -40,7 +48,39 @@ test("CLI parses explicit expose options without command-line secrets", () => {
   );
 });
 
-test("CLI uses environment defaults and rejects malformed arguments", () => {
+test("CLI combines config defaults with environment and argument overrides", () => {
+  assert.deepEqual(
+    parseExposeArgs([], {}, "desktop", {
+      gateway: "http://configured.test",
+      token: "configured-token",
+      name: "configured-name"
+    }),
+    {
+      root: undefined,
+      name: "configured-name",
+      gateway: "http://configured.test",
+      token: "configured-token",
+      allowBroadRoot: false
+    }
+  );
+  assert.deepEqual(
+    parseExposeArgs(
+      ["--name", "argument-name"],
+      { VERONICA_GATEWAY: "http://environment.test", VERONICA_TOKEN: "environment-token" },
+      "desktop",
+      { gateway: "http://configured.test", token: "configured-token", name: "configured-name" }
+    ),
+    {
+      root: undefined,
+      name: "argument-name",
+      gateway: "http://environment.test",
+      token: "environment-token",
+      allowBroadRoot: false
+    }
+  );
+});
+
+test("CLI uses safe defaults and rejects malformed expose arguments", () => {
   assert.deepEqual(parseExposeArgs([], { VERONICA_TOKEN: "secret" }, "desktop"), {
     root: undefined,
     name: "desktop",
@@ -48,17 +88,7 @@ test("CLI uses environment defaults and rejects malformed arguments", () => {
     token: "secret",
     allowBroadRoot: false
   });
-  assert.deepEqual(
-    parseExposeArgs([], { VERONICA_GATEWAY: "http://private.test", VERONICA_TOKEN: "secret" }, "desktop"),
-    {
-      root: undefined,
-      name: "desktop",
-      gateway: "http://private.test",
-      token: "secret",
-      allowBroadRoot: false
-    }
-  );
-  assert.throws(() => parseExposeArgs([], {}, "desktop"), /Set VERONICA_TOKEN/);
+  assert.throws(() => parseExposeArgs([], {}, "desktop"), /init worker|VERONICA_TOKEN/);
   assert.throws(
     () => parseExposeArgs(["one", "two"], { VERONICA_TOKEN: "secret" }, "desktop"),
     /Unexpected argument/
@@ -67,6 +97,60 @@ test("CLI uses environment defaults and rejects malformed arguments", () => {
     () => parseExposeArgs(["--unknown"], { VERONICA_TOKEN: "secret" }, "desktop"),
     /Unknown option/
   );
+});
+
+test("CLI parses worker and gateway initialization", () => {
+  assert.deepEqual(
+    parseInitArgs(["worker", "--gateway", "http://gateway.test", "--name", "laptop", "--token-file", "token"]),
+    { target: "worker", gateway: "http://gateway.test", name: "laptop", tokenFile: "token" }
+  );
+  assert.deepEqual(
+    parseInitArgs([
+      "gateway",
+      "--hosts",
+      "127.0.0.1,10.0.0.1",
+      "--port",
+      "39101",
+      "--allowed-hosts",
+      "localhost,gateway.test"
+    ]),
+    {
+      target: "gateway",
+      hosts: ["127.0.0.1", "10.0.0.1"],
+      port: 39101,
+      allowedHosts: ["localhost", "gateway.test"]
+    }
+  );
+  assert.throws(() => parseInitArgs([]), /init worker|init gateway/);
+  assert.throws(() => parseInitArgs(["gateway", "--port", "70000"]), /Invalid port/);
+});
+
+test("worker and gateway initialization preserve the other config section", async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "veronica-cli-init-"));
+  const configFile = path.join(directory, "config.json");
+  const tokenFile = path.join(directory, "token");
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(tokenFile, "worker-secret\n", "utf8");
+
+  const gateway = await initializeConfig(
+    { target: "gateway", hosts: ["127.0.0.1"], port: 39100, allowedHosts: ["localhost"] },
+    { VERONICA_DEVICE_TOKEN: "d".repeat(32) },
+    configFile
+  );
+  assert.equal(gateway.generatedToken, "d".repeat(32));
+
+  const worker = await initializeConfig(
+    { target: "worker", gateway: "http://127.0.0.1:39100", name: "laptop", tokenFile },
+    {},
+    configFile
+  );
+  assert.equal(worker.config.gateway?.deviceToken, "d".repeat(32));
+  assert.deepEqual(worker.config.worker, {
+    token: "worker-secret",
+    gateway: "http://127.0.0.1:39100",
+    name: "laptop"
+  });
+  assert.match(await readFile(configFile, "utf8"), /worker-secret/);
 });
 
 test("CLI selects the Git worktree root when no path is provided", async t => {
