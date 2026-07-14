@@ -11,30 +11,31 @@ Veronica is experimental. Do not treat the current implementation as a hardened 
 The prototype assumes:
 
 - One trusted operator
-- Trusted users authenticated by the configured OAuth identity provider
+- Trusted users admitted by the transport or reverse proxy in front of `/mcp`
 - Trusted computers running the worker
-- TLS termination in front of any internet-facing gateway
+- TLS termination in front of any internet-reachable MCP transport
 - No hostile multi-tenant use
 
-OAuth protects the public MCP endpoint. The gateway verifies access token signature, issuer, audience, expiry, and required scopes. A separate random bearer token protects private worker endpoints. Use at least 32 random characters for the device token and rotate it if exposed.
+Veronica does not authenticate MCP clients. The system that exposes `/mcp` must provide the access boundary, such as an authenticated private tunnel, VPN, mutually authenticated proxy, or equivalent operator-controlled transport. A separate random bearer token protects private worker endpoints. Use at least 32 random characters for the device token and rotate it if exposed.
 
 ## Safe deployment guidance
 
-- Bind the Node process only to loopback and the VPS WireGuard interface.
-- Publish only `/mcp` and `/healthz` through a maintained HTTPS reverse proxy.
-- Keep `/device/*` on WireGuard. Do not add public forwarding or DNAT for port `39100`.
-- Do not use Cloudflare Tunnel for worker traffic.
+- Bind the Node process only to loopback and the gateway's private network interface.
+- Expose `/mcp` only through a transport that admits the intended MCP clients.
+- Never publish `/mcp` as an anonymous internet endpoint.
+- Publish `/healthz` only when operationally useful.
+- Keep `/device/*` on the private network. Do not add public forwarding or DNAT for the gateway port.
+- Do not use a public tunnel for worker traffic.
 - Expose the smallest useful directory.
 - Run the worker under a dedicated operating system account when practical.
 - Use a container or VM for untrusted repositories or unattended work.
-- Workers read `VERONICA_TOKEN`; gateways accept only `VERONICA_DEVICE_TOKEN`.
+- Workers read `VERONICA_TOKEN`; gateways accept only `VERONICA_DEVICE_TOKEN` on `/device/*`.
 - Do not expose a worker that has credentials the agent should not be able to use.
 
 ## Implemented controls
 
-- `/mcp` requires an OAuth access token with the `veronica:access` scope.
+- `/mcp` is intentionally unauthenticated inside the gateway and relies on the surrounding transport boundary.
 - `/device/*` requires the private device bearer token.
-- The gateway publishes OAuth protected resource metadata and returns a standards-based bearer challenge.
 - A worker exposes one canonical directory root. With no path, the CLI selects the Git worktree root and refuses home or filesystem roots without explicit confirmation.
 - File operations reject absolute paths and lexical parent escapes.
 - Existing paths and writable ancestors are resolved to detect symlink escapes.
@@ -44,11 +45,12 @@ OAuth protects the public MCP endpoint. The gateway verifies access token signat
 - Queued jobs carry an expiry and are removed when their caller times out.
 - Command duration is limited by the requested timeout, and worker shutdown also terminates the active process tree on Windows and Unix-like systems.
 - Device, workspace, and job state is held only in memory.
+- MCP tool annotations describe write and command operations as non-read-only and destructive-capable.
 
 ## Known limitations
 
-- One shared token is still used for all workers instead of per-device identities.
-- OAuth authorization depends on the identity provider's user, client, consent, and revocation controls.
+- The gateway cannot identify, authorize, or revoke individual MCP clients; those controls belong to the surrounding transport.
+- One shared token is used for all workers instead of per-device identities.
 - There is no device enrollment, certificate rotation, or device revocation list.
 - There is no local approval prompt or durable audit log.
 - Shell commands inherit the worker's environment.
