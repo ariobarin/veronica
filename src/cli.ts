@@ -245,19 +245,22 @@ export async function initializeConfig(
     return { config };
   }
 
-  const generatedToken = environment.VERONICA_DEVICE_TOKEN || current.gateway?.deviceToken || generateDeviceToken();
+  const configuredToken = environment.VERONICA_DEVICE_TOKEN || current.gateway?.deviceToken;
+  const generatedToken = configuredToken ? undefined : generateDeviceToken();
+  const deviceToken = configuredToken ?? generatedToken;
+  if (!deviceToken) throw new Error("Unable to generate a gateway token");
   const config: VeronicaConfig = {
     ...current,
     gateway: {
       ...current.gateway,
-      deviceToken: generatedToken,
+      deviceToken,
       hosts: options.hosts ?? current.gateway?.hosts ?? [DEFAULT_HOST],
       port: options.port ?? current.gateway?.port ?? DEFAULT_PORT,
       ...(options.allowedHosts === undefined ? {} : { allowedHosts: options.allowedHosts })
     }
   };
   await writeConfig(config, file);
-  return { config, generatedToken };
+  return { config, ...(generatedToken === undefined ? {} : { generatedToken }) };
 }
 
 async function expose(args: string[], config: VeronicaConfig): Promise<void> {
