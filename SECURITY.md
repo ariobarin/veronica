@@ -27,7 +27,7 @@ OAuth protects the public MCP endpoint. The gateway verifies access token signat
 - Expose the smallest useful directory.
 - Run the worker under a dedicated operating system account when practical.
 - Use a container or VM for untrusted repositories or unattended work.
-- Worker tokens are accepted only through `VERONICA_TOKEN`; gateway tokens use `VERONICA_DEVICE_TOKEN`.
+- Workers read `VERONICA_TOKEN`. Gateways should use `VERONICA_DEVICE_TOKEN`; `VERONICA_TOKEN` remains an accepted gateway compatibility fallback in this revision.
 - Do not expose a worker that has credentials the agent should not be able to use.
 
 ## Implemented controls
