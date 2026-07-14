@@ -18,6 +18,8 @@ import {
 } from "./auth.js";
 import { Broker } from "./broker.js";
 import {
+  argvSchema,
+  commandInvocationSchema,
   commandSchema,
   commandValueSchema,
   DEFAULT_COMMAND_TIMEOUT_SECONDS,
@@ -171,10 +173,12 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
     "run_command",
     {
       title: "Run workspace command",
-      description: "Run one shell command in an open Veronica workspace and return its completed output.",
+      description: "Run one direct argv invocation or one shell command in an open Veronica workspace.",
       inputSchema: {
         workspace_id: z.string().uuid(),
-        command: commandSchema,
+        argv: argvSchema.optional(),
+        shell_command: commandSchema.optional(),
+        stdin: textContentSchema.optional(),
         timeout_seconds: timeoutSecondsSchema.default(DEFAULT_COMMAND_TIMEOUT_SECONDS)
       },
       annotations: {
@@ -185,14 +189,27 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
       },
       _meta: oauthToolMeta
     },
-    async ({ workspace_id: workspaceId, command, timeout_seconds: timeoutSeconds }) => {
+    async ({
+      workspace_id: workspaceId,
+      argv,
+      shell_command: shellCommand,
+      stdin,
+      timeout_seconds: timeoutSeconds
+    }) => {
       try {
+        const parsedInvocation = commandInvocationSchema.safeParse({ argv, shellCommand, stdin });
+        if (!parsedInvocation.success) {
+          throw new VeronicaError(
+            "invalid_request",
+            parsedInvocation.error.issues[0]?.message ?? "Invalid command invocation"
+          );
+        }
         const result = await broker.executeInWorkspace(
           workspaceId,
           workspace => ({
             type: "run_command",
             workspace,
-            command,
+            ...parsedInvocation.data,
             timeoutSeconds
           }),
           (timeoutSeconds + 10) * 1000

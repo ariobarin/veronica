@@ -6,7 +6,7 @@ Veronica lets an agent use a directory on one of your computers as a remote codi
 agent -> OAuth protected MCP gateway -> private worker connection -> files and shell
 ```
 
-The gateway exposes six MCP tools: `list_devices`, `open_workspace`, `read_file`, `write_file`, `run_command`, and `close_workspace`. The worker makes outbound requests only and exposes one directory chosen by its operator. File reads return a SHA-256 revision, and writes can require that revision before atomic replacement.
+The gateway exposes six MCP tools: `list_devices`, `open_workspace`, `read_file`, `write_file`, `run_command`, and `close_workspace`. The worker makes outbound requests only and exposes one directory chosen by its operator. File reads return a SHA-256 revision, and writes can require that revision before atomic replacement. Commands accept either a direct argument array or an explicit shell command, plus optional standard input.
 
 > Veronica is an early prototype. Commands run with the permissions and environment of the user who starts the worker. Read [SECURITY.md](SECURITY.md) before exposing a workstation.
 
@@ -151,7 +151,7 @@ Complete login and consent with the identity provider. Then call:
 list_devices
 open_workspace(device="laptop", path="project")
 read_file(workspace_id="...", path="README.md")
-run_command(workspace_id="...", command="git status")
+run_command(workspace_id="...", argv=["git", "status"])
 close_workspace(workspace_id="...")
 ```
 

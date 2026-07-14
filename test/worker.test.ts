@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { access, chmod, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -11,7 +11,7 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-test("worker executes file and command requests inside a workspace", async t => {
+test("worker executes file requests with revision checks", async t => {
   const rootInput = await mkdtemp(path.join(os.tmpdir(), "veronica-worker-"));
   t.after(() => rm(rootInput, { recursive: true, force: true }));
   await writeFile(path.join(rootInput, "README.md"), "hello", "utf8");
@@ -129,23 +129,198 @@ test("worker executes file and command requests inside a workspace", async t => 
       assert.equal(await readFile(readOnly, "utf8"), "original");
     }
   }
+});
 
-  const command = (await executeWorkerRequest(root, {
+test("direct argv execution preserves arguments and standard input", async t => {
+  const rootInput = await mkdtemp(path.join(os.tmpdir(), "veronica-command-"));
+  t.after(() => rm(rootInput, { recursive: true, force: true }));
+  const root = await canonicalizeRoot(rootInput);
+
+  const argumentsResult = (await executeWorkerRequest(root, {
     type: "run_command",
     workspace: ".",
-    command: process.platform === "win32" ? "cd" : "pwd",
+    argv: [
+      process.execPath,
+      "-e",
+      "process.stdout.write(JSON.stringify(process.argv.slice(1)))",
+      "argument with spaces",
+      "snowman-☃"
+    ],
     timeoutSeconds: 10
   })) as {
     exitCode: number | null;
+    spawnError: string | null;
     stdout: string;
-    stderr: string;
-    truncated: boolean;
     timedOut: boolean;
   };
-  assert.equal(command.exitCode, 0);
-  assert.equal(command.stdout.trim(), await realpath(root));
-  assert.equal(command.stderr, "");
-  assert.equal(command.truncated, false);
-  assert.equal(command.timedOut, false);
+  assert.equal(argumentsResult.exitCode, 0);
+  assert.equal(argumentsResult.spawnError, null);
+  assert.deepEqual(JSON.parse(argumentsResult.stdout), ["argument with spaces", "snowman-☃"]);
+  assert.equal(argumentsResult.timedOut, false);
+
+  const stdinResult = (await executeWorkerRequest(root, {
+    type: "run_command",
+    workspace: ".",
+    argv: [process.execPath, "-e", "process.stdin.pipe(process.stdout)"],
+    stdin: "hello through stdin",
+    timeoutSeconds: 10
+  })) as {
+    exitCode: number | null;
+    spawnError: string | null;
+    stdout: string;
+  };
+  assert.equal(stdinResult.exitCode, 0);
+  assert.equal(stdinResult.spawnError, null);
+  assert.equal(stdinResult.stdout, "hello through stdin");
+
+  const shellResult = (await executeWorkerRequest(root, {
+    type: "run_command",
+    workspace: ".",
+    shellCommand: process.platform === "win32" ? "echo shell-mode" : "printf shell-mode",
+    timeoutSeconds: 10
+  })) as {
+    exitCode: number | null;
+    spawnError: string | null;
+    stdout: string;
+  };
+  assert.equal(shellResult.exitCode, 0);
+  assert.equal(shellResult.spawnError, null);
+  assert.equal(shellResult.stdout.trim(), "shell-mode");
+
+  if (process.platform === "win32") {
+    const batchResult = (await executeWorkerRequest(root, {
+      type: "run_command",
+      workspace: ".",
+      argv: ["npm", "--version"],
+      timeoutSeconds: 10
+    })) as {
+      exitCode: number | null;
+      spawnError: string | null;
+      stdout: string;
+    };
+    assert.equal(batchResult.exitCode, 0);
+    assert.equal(batchResult.spawnError, null);
+    assert.match(batchResult.stdout.trim(), /^\d+\.\d+\.\d+/);
+  }
 });
 
+test("command execution reports spawn errors without throwing", async t => {
+  const rootInput = await mkdtemp(path.join(os.tmpdir(), "veronica-spawn-"));
+  t.after(() => rm(rootInput, { recursive: true, force: true }));
+  const root = await canonicalizeRoot(rootInput);
+
+  const result = (await executeWorkerRequest(root, {
+    type: "run_command",
+    workspace: ".",
+    argv: ["veronica-executable-that-does-not-exist"],
+    timeoutSeconds: 10
+  })) as {
+    exitCode: number | null;
+    spawnError: string | null;
+    timedOut: boolean;
+  };
+  assert.equal(result.exitCode, null);
+  assert.match(result.spawnError ?? "", /ENOENT|not found/i);
+  assert.equal(result.timedOut, false);
+});
+
+test("Unix timeout terminates descendants in a new session", { skip: process.platform !== "linux" }, async t => {
+  const rootInput = await mkdtemp(path.join(os.tmpdir(), "veronica-setsid-"));
+  t.after(() => rm(rootInput, { recursive: true, force: true }));
+  const root = await canonicalizeRoot(rootInput);
+  const marker = path.join(root, "setsid-descendant-survived.txt");
+  const script = path.join(root, "escaped.sh");
+  const quotedMarker = marker.replaceAll("'", "'\''");
+  await writeFile(
+    script,
+    `#!/bin/sh
+trap '' TERM
+sleep 2
+printf alive > '${quotedMarker}'
+sleep 10
+`,
+    "utf8"
+  );
+  await chmod(script, 0o755);
+  const quotedScript = script.replaceAll("'", "'\''");
+  const startedAt = Date.now();
+  const result = (await executeWorkerRequest(root, {
+    type: "run_command",
+    workspace: ".",
+    shellCommand: `setsid '${quotedScript}'`,
+    timeoutSeconds: 1
+  })) as { timedOut: boolean; spawnError: string | null };
+
+  assert.equal(result.timedOut, true);
+  assert.equal(result.spawnError, null);
+  assert.ok(Date.now() - startedAt >= 1_400);
+  assert.ok(Date.now() - startedAt < 5_000);
+  await new Promise(resolve => setTimeout(resolve, 2_500));
+  await assert.rejects(access(marker), error => error instanceof Error && "code" in error && error.code === "ENOENT");
+});
+
+test("worker abort terminates the active command process tree", async t => {
+  const rootInput = await mkdtemp(path.join(os.tmpdir(), "veronica-abort-"));
+  t.after(() => rm(rootInput, { recursive: true, force: true }));
+  const root = await canonicalizeRoot(rootInput);
+  const marker = path.join(root, "abort-descendant-survived.txt");
+  const markerWrite = `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(marker)}, "alive"), 2000)`;
+  const childCode = process.platform === "win32"
+    ? markerWrite
+    : `process.on("SIGTERM", () => {});${markerWrite};setTimeout(() => {}, 10000)`;
+  const parentCode = [
+    'const { spawn } = require("node:child_process")',
+    `spawn(process.execPath, ["-e", ${JSON.stringify(childCode)}], { stdio: "ignore" })`,
+    "setTimeout(() => {}, 10000)"
+  ].join(";");
+  const controller = new AbortController();
+  const execution = executeWorkerRequest(
+    root,
+    {
+      type: "run_command",
+      workspace: ".",
+      argv: [process.execPath, "-e", parentCode],
+      timeoutSeconds: 10
+    },
+    controller.signal
+  ) as Promise<{ timedOut: boolean; spawnError: string | null }>;
+
+  setTimeout(() => controller.abort(), 100);
+  const result = await execution;
+  assert.equal(result.timedOut, false);
+  assert.equal(result.spawnError, null);
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  await assert.rejects(access(marker), error => error instanceof Error && "code" in error && error.code === "ENOENT");
+});
+
+test("command timeout terminates descendant processes", async t => {
+  const rootInput = await mkdtemp(path.join(os.tmpdir(), "veronica-timeout-"));
+  t.after(() => rm(rootInput, { recursive: true, force: true }));
+  const root = await canonicalizeRoot(rootInput);
+  const marker = path.join(root, "descendant-survived.txt");
+  const markerWrite = `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(marker)}, "alive"), 2000)`;
+  const childCode = process.platform === "win32"
+    ? markerWrite
+    : `process.on("SIGTERM", () => {});${markerWrite};setTimeout(() => {}, 10000)`;
+  const parentCode = [
+    'const { spawn } = require("node:child_process")',
+    `spawn(process.execPath, ["-e", ${JSON.stringify(childCode)}], { stdio: "ignore" })`,
+    "setTimeout(() => {}, 10000)"
+  ].join(";");
+
+  const startedAt = Date.now();
+  const result = (await executeWorkerRequest(root, {
+    type: "run_command",
+    workspace: ".",
+    argv: [process.execPath, "-e", parentCode],
+    timeoutSeconds: 1
+  })) as {
+    timedOut: boolean;
+    spawnError: string | null;
+  };
+  assert.equal(result.timedOut, true);
+  assert.equal(result.spawnError, null);
+  if (process.platform !== "win32") assert.ok(Date.now() - startedAt >= 1_400);
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  await assert.rejects(access(marker), error => error instanceof Error && "code" in error && error.code === "ENOENT");
+});

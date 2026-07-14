@@ -6,11 +6,28 @@ export const MAX_COMMAND_TIMEOUT_SECONDS = 3600;
 
 export const relativePathSchema = z.string().min(1).max(4096);
 export const commandSchema = z.string().min(1).max(100_000);
+export const commandArgumentSchema = z.string().max(32_768);
+export const argvSchema = z.array(commandArgumentSchema).min(1).max(1024);
 export const timeoutSecondsSchema = z.number().int().min(1).max(MAX_COMMAND_TIMEOUT_SECONDS);
 export const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 export const textContentSchema = z.string().refine(value => Buffer.byteLength(value, "utf8") <= MAX_TEXT_BYTES, {
   message: "Content exceeds the 1 MiB limit"
 });
+
+export const commandInvocationSchema = z
+  .object({
+    argv: argvSchema.optional(),
+    shellCommand: commandSchema.optional(),
+    stdin: textContentSchema.optional()
+  })
+  .superRefine((value, context) => {
+    if (Number(value.argv !== undefined) + Number(value.shellCommand !== undefined) !== 1) {
+      context.addIssue({
+        code: "custom",
+        message: "Provide exactly one of argv or shell_command"
+      });
+    }
+  });
 
 export const veronicaErrorCodeSchema = z.enum([
   "invalid_request",
@@ -42,29 +59,48 @@ export function toWorkerError(error: unknown): WorkerError {
   return { code: "operation_failed", message: error instanceof Error ? error.message : String(error) };
 }
 
-export const workerRequestSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("open_workspace"),
-    path: relativePathSchema
-  }),
-  z.object({
-    type: z.literal("read_file"),
-    workspace: relativePathSchema,
-    path: relativePathSchema
-  }),
-  z.object({
-    type: z.literal("write_file"),
-    workspace: relativePathSchema,
-    path: relativePathSchema,
-    content: textContentSchema,
-    expectedSha256: sha256Schema.optional()
-  }),
-  z.object({
+const openWorkspaceRequestSchema = z.object({
+  type: z.literal("open_workspace"),
+  path: relativePathSchema
+});
+
+const readFileRequestSchema = z.object({
+  type: z.literal("read_file"),
+  workspace: relativePathSchema,
+  path: relativePathSchema
+});
+
+const writeFileRequestSchema = z.object({
+  type: z.literal("write_file"),
+  workspace: relativePathSchema,
+  path: relativePathSchema,
+  content: textContentSchema,
+  expectedSha256: sha256Schema.optional()
+});
+
+const runCommandRequestSchema = z
+  .object({
     type: z.literal("run_command"),
     workspace: relativePathSchema,
-    command: commandSchema,
+    argv: argvSchema.optional(),
+    shellCommand: commandSchema.optional(),
+    stdin: textContentSchema.optional(),
     timeoutSeconds: timeoutSecondsSchema
   })
+  .superRefine((value, context) => {
+    if (Number(value.argv !== undefined) + Number(value.shellCommand !== undefined) !== 1) {
+      context.addIssue({
+        code: "custom",
+        message: "Provide exactly one of argv or shell_command"
+      });
+    }
+  });
+
+export const workerRequestSchema = z.union([
+  openWorkspaceRequestSchema,
+  readFileRequestSchema,
+  writeFileRequestSchema,
+  runCommandRequestSchema
 ]);
 
 export type WorkerRequest = z.infer<typeof workerRequestSchema>;
@@ -110,6 +146,7 @@ export const writeFileValueSchema = z.object({
 export const commandValueSchema = z.object({
   exitCode: z.number().int().nullable(),
   signal: z.string().nullable(),
+  spawnError: z.string().nullable(),
   stdout: z.string(),
   stderr: z.string(),
   truncated: z.boolean(),

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod/v4";
@@ -18,6 +19,8 @@ import { canonicalizeRoot, resolveExistingPath, resolveWritePath } from "./path-
 
 const registerResponseSchema = z.object({ deviceId: z.string().uuid() });
 const pollResponseSchema = z.object({ job: deviceJobSchema.nullable() });
+
+type RunCommandRequest = Extract<WorkerRequest, { type: "run_command" }>;
 
 class GatewayError extends Error {
   constructor(
@@ -72,23 +75,174 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function runCommand(cwd: string, command: string, timeoutSeconds: number) {
-  const shell = process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : process.env.SHELL ?? "/bin/sh";
-  const args = process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-lc", command];
+function resolveWindowsCommand(cwd: string, file: string): string {
+  const extensions = path.extname(file)
+    ? [""]
+    : (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  const names = extensions.map(extension => `${file}${extension}`);
+  const candidates = path.isAbsolute(file)
+    ? names
+    : file.includes("/") || file.includes("\\")
+      ? names.map(name => path.resolve(cwd, name))
+      : (process.env.PATH ?? "")
+          .split(path.delimiter)
+          .filter(Boolean)
+          .flatMap(directory => names.map(name => path.join(directory, name)));
+  return candidates.find(candidate => existsSync(candidate)) ?? file;
+}
 
+function quoteWindowsBatchArgument(value: string): string {
+  if (/[\r\n"%!]/.test(value)) {
+    throw new VeronicaError(
+      "invalid_request",
+      "Windows batch argv does not support quotes, percent signs, exclamation marks, or newlines; use shell_command"
+    );
+  }
+  return `"${value}"`;
+}
+
+function commandInvocation(
+  cwd: string,
+  request: RunCommandRequest
+): { file: string; args: string[]; windowsVerbatimArguments?: boolean } {
+  if (request.argv) {
+    const [file, ...args] = request.argv;
+    if (!file) throw new VeronicaError("invalid_request", "argv must contain an executable");
+    if (process.platform === "win32") {
+      const resolvedFile = resolveWindowsCommand(cwd, file);
+      if (/\.(?:cmd|bat)$/i.test(resolvedFile)) {
+        const command = [resolvedFile, ...args].map(quoteWindowsBatchArgument).join(" ");
+        return {
+          file: process.env.ComSpec ?? "cmd.exe",
+          args: ["/d", "/s", "/c", `call ${command}`],
+          windowsVerbatimArguments: true
+        };
+      }
+      return { file: resolvedFile, args };
+    }
+    return { file, args };
+  }
+  if (request.shellCommand === undefined) {
+    throw new VeronicaError("invalid_request", "Provide exactly one of argv or shell_command");
+  }
+  if (process.platform === "win32") {
+    const file = process.env.SystemRoot ? path.join(process.env.SystemRoot, "System32", "cmd.exe") : "cmd.exe";
+    return { file, args: ["/d", "/s", "/c", request.shellCommand] };
+  }
+  return { file: "/bin/sh", args: ["-c", request.shellCommand] };
+}
+
+async function listUnixDescendants(rootPid: number): Promise<number[]> {
+  return await new Promise(resolve => {
+    const scanner = spawn("ps", ["-A", "-o", "pid=,ppid="], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    const chunks: Buffer[] = [];
+    let capturedBytes = 0;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      const children = new Map<number, number[]>();
+      for (const line of Buffer.concat(chunks).toString("utf8").split(/\r?\n/)) {
+        const [pidText, parentText] = line.trim().split(/\s+/);
+        const pid = Number.parseInt(pidText ?? "", 10);
+        const parent = Number.parseInt(parentText ?? "", 10);
+        if (!Number.isInteger(pid) || !Number.isInteger(parent)) continue;
+        const siblings = children.get(parent) ?? [];
+        siblings.push(pid);
+        children.set(parent, siblings);
+      }
+
+      const descendants: number[] = [];
+      const seen = new Set<number>([rootPid]);
+      const stack = [rootPid];
+      while (stack.length > 0) {
+        const parent = stack.pop();
+        if (parent === undefined) break;
+        for (const child of children.get(parent) ?? []) {
+          if (seen.has(child)) continue;
+          seen.add(child);
+          descendants.push(child);
+          stack.push(child);
+        }
+      }
+      resolve(descendants);
+    };
+    scanner.stdout.on("data", (chunk: Buffer) => {
+      const remaining = MAX_TEXT_BYTES - capturedBytes;
+      if (remaining <= 0) return;
+      const accepted = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+      chunks.push(accepted);
+      capturedBytes += accepted.length;
+    });
+    scanner.on("error", () => resolve([]));
+    scanner.on("close", finish);
+  });
+}
+
+function trySignal(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // The process already exited or is not signalable by this worker.
+  }
+}
+
+async function terminateProcessTree(pid: number | undefined): Promise<void> {
+  if (!pid) return;
+  if (process.platform === "win32") {
+    await new Promise<void>(resolve => {
+      const killer = spawn("taskkill.exe", ["/pid", String(pid), "/t", "/f"], {
+        windowsHide: true,
+        stdio: "ignore"
+      });
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      killer.on("error", () => {
+        trySignal(pid, "SIGTERM");
+        finish();
+      });
+      killer.on("close", finish);
+    });
+    return;
+  }
+
+  const descendants = new Set(await listUnixDescendants(pid));
+  for (const descendant of [...descendants].reverse()) trySignal(descendant, "SIGTERM");
+  trySignal(-pid, "SIGTERM");
+  trySignal(pid, "SIGTERM");
+
+  await new Promise<void>(resolve => setTimeout(resolve, 500));
+  for (const descendant of await listUnixDescendants(pid)) descendants.add(descendant);
+  for (const descendant of [...descendants].reverse()) trySignal(descendant, "SIGKILL");
+  trySignal(-pid, "SIGKILL");
+  trySignal(pid, "SIGKILL");
+}
+
+async function runCommand(cwd: string, request: RunCommandRequest, signal?: AbortSignal) {
+  const invocation = commandInvocation(cwd, request);
   return await new Promise<{
     exitCode: number | null;
     signal: NodeJS.Signals | null;
+    spawnError: string | null;
     stdout: string;
     stderr: string;
     truncated: boolean;
     timedOut: boolean;
-  }>((resolve, reject) => {
-    const child = spawn(shell, args, {
+  }>(resolve => {
+    const child = spawn(invocation.file, invocation.args, {
       cwd,
       env: process.env,
+      detached: process.platform !== "win32",
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"]
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+      stdio: ["pipe", "pipe", "pipe"]
     });
 
     const stdout: Buffer[] = [];
@@ -96,6 +250,23 @@ async function runCommand(cwd: string, command: string, timeoutSeconds: number) 
     let capturedBytes = 0;
     let truncated = false;
     let timedOut = false;
+    let settled = false;
+    let termination: Promise<void> | undefined;
+    let timer: NodeJS.Timeout | undefined;
+
+    const startTermination = () => {
+      termination ??= terminateProcessTree(child.pid).finally(() => {
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+      });
+      return termination;
+    };
+    const abort = () => {
+      void startTermination();
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
 
     const capture = (chunk: Buffer, target: Buffer[]) => {
       const remaining = MAX_TEXT_BYTES - capturedBytes;
@@ -109,26 +280,36 @@ async function runCommand(cwd: string, command: string, timeoutSeconds: number) 
       if (accepted.length !== chunk.length) truncated = true;
     };
 
-    child.stdout.on("data", (chunk: Buffer) => capture(chunk, stdout));
-    child.stderr.on("data", (chunk: Buffer) => capture(chunk, stderr));
-    child.on("error", reject);
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, timeoutSeconds * 1000);
-
-    child.on("close", (exitCode, signal) => {
-      clearTimeout(timer);
+    const finish = async (exitCode: number | null, exitSignal: NodeJS.Signals | null, spawnError: string | null) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      if (termination) await termination;
       resolve({
         exitCode,
-        signal,
+        signal: exitSignal,
+        spawnError,
         stdout: Buffer.concat(stdout).toString("utf8"),
         stderr: Buffer.concat(stderr).toString("utf8"),
         truncated,
         timedOut
       });
-    });
+    };
+
+    child.stdout.on("data", (chunk: Buffer) => capture(chunk, stdout));
+    child.stderr.on("data", (chunk: Buffer) => capture(chunk, stderr));
+    child.stdin.on("error", () => undefined);
+    child.on("error", error => void finish(null, null, error.message));
+    child.on("close", (exitCode, signal) => void finish(exitCode, signal, null));
+
+    if (request.stdin === undefined) child.stdin.end();
+    else child.stdin.end(request.stdin, "utf8");
+
+    timer = setTimeout(() => {
+      timedOut = true;
+      void startTermination();
+    }, (request.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS) * 1000);
   });
 }
 
@@ -195,7 +376,11 @@ async function replaceFileAtomically(file: string, content: string): Promise<voi
   }
 }
 
-export async function executeWorkerRequest(root: string, request: WorkerRequest): Promise<unknown> {
+export async function executeWorkerRequest(
+  root: string,
+  request: WorkerRequest,
+  signal?: AbortSignal
+): Promise<unknown> {
   if (request.type === "open_workspace") {
     const workspace = await resolveExistingPath(root, request.path);
     const metadata = await stat(workspace);
@@ -225,16 +410,16 @@ export async function executeWorkerRequest(root: string, request: WorkerRequest)
     };
   }
 
-  return await runCommand(
-    workspace,
-    request.command,
-    request.timeoutSeconds ?? DEFAULT_COMMAND_TIMEOUT_SECONDS
-  );
+  return await runCommand(workspace, request, signal);
 }
 
-export async function executeDeviceJob(root: string, job: DeviceJob): Promise<WorkerResult> {
+export async function executeDeviceJob(
+  root: string,
+  job: DeviceJob,
+  signal?: AbortSignal
+): Promise<WorkerResult> {
   try {
-    return { ok: true, value: await executeWorkerRequest(root, job.request) };
+    return { ok: true, value: await executeWorkerRequest(root, job.request, signal) };
   } catch (error) {
     return { ok: false, error: toWorkerError(error) };
   }
@@ -285,7 +470,7 @@ export async function runWorker(options: WorkerOptions): Promise<void> {
       );
 
       if (!polled.job) continue;
-      const result = await executeDeviceJob(root, polled.job);
+      const result = await executeDeviceJob(root, polled.job, options.signal);
 
       await postJson(
         options.gateway,

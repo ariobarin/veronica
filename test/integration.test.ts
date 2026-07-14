@@ -86,7 +86,7 @@ test("gateway routes real workspace operations through a polling worker", async 
   const command = await broker.executeInWorkspace(workspace.id, workspacePath => ({
     type: "run_command",
     workspace: workspacePath,
-    command: process.platform === "win32" ? "cd" : "pwd",
+    argv: [process.execPath, "-p", "process.cwd()"],
     timeoutSeconds: 10
   }));
   assert.equal(command.ok, true);
