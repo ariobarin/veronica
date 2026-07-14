@@ -4,19 +4,26 @@
 
 Veronica is experimental. Do not treat the current implementation as a hardened remote access product.
 
-`veronica expose` runs commands with the permissions and environment of the user who launched it. A command can potentially access that user's credentials, network, developer tools, and any filesystem locations allowed by the operating system account. The exposed-root checks limit Veronica's file tools, but they do not sandbox shell commands.
+`veronica expose` and `veronica local` run commands with the permissions and environment of the user who launched them. A command can potentially access that user's credentials, network, developer tools, and any filesystem locations allowed by the operating system account. The exposed-root checks limit Veronica's file tools, but they do not sandbox shell commands.
 
 ## Current trust model
 
 The prototype assumes:
 
 - One trusted operator
-- Trusted users admitted by the transport or reverse proxy in front of `/mcp`
+- Trusted users admitted by the transport or reverse proxy in front of a production `/mcp` endpoint
 - Trusted computers running the worker
 - TLS termination in front of any internet-reachable MCP transport
+- Trusted local processes when using `veronica local`
 - No hostile multi-tenant use
 
-Veronica does not authenticate MCP clients. The system that exposes `/mcp` must provide the access boundary, such as an authenticated private tunnel, VPN, mutually authenticated proxy, or equivalent operator-controlled transport. A separate random bearer token protects private worker endpoints. Use at least 32 random characters for the device token and rotate it if exposed.
+Veronica does not authenticate MCP clients. The system that exposes a production `/mcp` endpoint must provide the access boundary, such as an authenticated private tunnel, VPN, mutually authenticated proxy, or equivalent operator-controlled transport. A separate random bearer token protects private worker endpoints. Use at least 32 random characters for the device token and rotate it if exposed.
+
+### Local mode
+
+`veronica local` starts an ephemeral gateway and worker connection in one process. The gateway binds only to `127.0.0.1`, generates an in-memory worker token, and prints a loopback MCP URL. The MCP endpoint remains unauthenticated: any process that can connect to that loopback port may invoke Veronica's tools against the selected workspace with the launching user's permissions. Loopback restricts network routing, not operating-system users or local malware.
+
+Use local mode only on a trusted single-user development machine. Do not run it on a shared or hostile host, do not forward or tunnel its port, and stop it when the local client session ends. Use the normal gateway deployment with an access-controlled transport for remote access.
 
 ## Safe deployment guidance
 
@@ -36,6 +43,7 @@ Veronica does not authenticate MCP clients. The system that exposes `/mcp` must 
 
 - `/mcp` is intentionally unauthenticated inside the gateway and relies on the surrounding transport boundary.
 - `/device/*` requires the private device bearer token.
+- Local mode binds the gateway to IPv4 loopback, uses an ephemeral operating-system-assigned port, and keeps its random worker token in memory.
 - A worker exposes one canonical directory root. With no path, the CLI selects the Git worktree root and refuses home or filesystem roots without explicit confirmation.
 - File operations reject absolute paths and lexical parent escapes.
 - Existing paths and writable ancestors are resolved to detect symlink escapes.
@@ -50,6 +58,7 @@ Veronica does not authenticate MCP clients. The system that exposes `/mcp` must 
 ## Known limitations
 
 - The gateway cannot identify, authorize, or revoke individual MCP clients; those controls belong to the surrounding transport.
+- Local mode does not distinguish local users or processes that can reach its loopback port.
 - One shared token is used for all workers instead of per-device identities.
 - There is no device enrollment, certificate rotation, or device revocation list.
 - There is no local approval prompt or durable audit log.
