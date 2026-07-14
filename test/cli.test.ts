@@ -137,7 +137,8 @@ test("worker and gateway initialization preserve the other config section", asyn
     { VERONICA_DEVICE_TOKEN: "d".repeat(32) },
     configFile
   );
-  assert.equal(gateway.generatedToken, "d".repeat(32));
+  assert.equal(gateway.generatedToken, undefined);
+  assert.equal(gateway.config.gateway?.deviceToken, "d".repeat(32));
 
   const worker = await initializeConfig(
     { target: "worker", gateway: "http://127.0.0.1:39100", name: "laptop", tokenFile },
@@ -151,6 +152,18 @@ test("worker and gateway initialization preserve the other config section", asyn
     name: "laptop"
   });
   assert.match(await readFile(configFile, "utf8"), /worker-secret/);
+});
+
+test("gateway initialization returns a token only when it generates one", async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "veronica-cli-token-"));
+  const configFile = path.join(directory, "config.json");
+  t.after(() => rm(directory, { recursive: true, force: true }));
+
+  const first = await initializeConfig({ target: "gateway" }, {}, configFile);
+  assert.match(first.generatedToken ?? "", /^[0-9a-f]{64}$/);
+  const second = await initializeConfig({ target: "gateway" }, {}, configFile);
+  assert.equal(second.generatedToken, undefined);
+  assert.equal(second.config.gateway?.deviceToken, first.config.gateway?.deviceToken);
 });
 
 test("CLI selects the Git worktree root when no path is provided", async t => {
