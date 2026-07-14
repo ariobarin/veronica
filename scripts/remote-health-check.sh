@@ -7,8 +7,6 @@ if [[ -z "$base_url" ]]; then
   exit 2
 fi
 base_url="${base_url%/}"
-expected_resource="${2:-${base_url}/}"
-metadata_url="${base_url}/.well-known/oauth-protected-resource"
 
 health="$(curl --fail --silent --show-error "${base_url}/healthz")"
 if [[ "$health" != *'"ok":true'* || "$health" != *'"service":"veronica"'* ]]; then
@@ -16,41 +14,25 @@ if [[ "$health" != *'"ok":true'* || "$health" != *'"service":"veronica"'* ]]; th
   exit 1
 fi
 
-metadata="$(curl --fail --silent --show-error "$metadata_url")"
-if [[ "$metadata" != *"\"resource\":\"${expected_resource}\""* || \
-  "$metadata" != *'"authorization_servers"'* || \
-  "$metadata" != *'"veronica:access"'* ]]; then
-  printf 'Unexpected OAuth resource metadata: %s\n' "$metadata" >&2
-  exit 1
-fi
-
-headers="$(mktemp)"
-trap 'rm -f "$headers"' EXIT
-status="$(curl --silent --dump-header "$headers" --output /dev/null --write-out '%{http_code}' \
+status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
   --request POST \
   --header 'content-type: application/json' \
   --data '{}' \
   "${base_url}/device/register")"
 if [[ "$status" != "404" ]]; then
-  printf 'Expected the public device route to return 404, got %s\n' "$status" >&2
+  printf 'Expected the remote device route to return 404, got %s\n' "$status" >&2
   exit 1
 fi
 
 status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-  --dump-header "$headers" \
   --request POST \
+  --header 'accept: application/json, text/event-stream' \
   --header 'content-type: application/json' \
-  --data '{}' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"veronica-health-check","version":"1.0.0"}}}' \
   "${base_url}/mcp")"
-if [[ "$status" != "401" ]]; then
-  printf 'Expected unauthenticated MCP access to return 401, got %s\n' "$status" >&2
-  exit 1
-fi
-challenge="$(tr -d '\r' < "$headers" | grep -i '^www-authenticate:' || true)"
-if [[ "$challenge" != *'scope="veronica:access"'* || \
-  "$challenge" != *"resource_metadata=\"${metadata_url}\""* ]]; then
-  printf '%s\n' 'OAuth bearer challenge is missing scopes or resource metadata' >&2
+if [[ "$status" != "200" ]]; then
+  printf 'Expected MCP initialize to return 200, got %s\n' "$status" >&2
   exit 1
 fi
 
-printf 'Veronica public routing and authentication checks passed for %s\n' "$base_url"
+printf 'Veronica remote routing checks passed for %s\n' "$base_url"
