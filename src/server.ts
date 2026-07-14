@@ -9,7 +9,8 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod/v4";
 import { Broker } from "./broker.js";
-import { DEFAULT_HOST, DEFAULT_PORT } from "./defaults.js";
+import { readConfig, type GatewayConfig } from "./config.js";
+import { DEFAULT_HOST, DEFAULT_PORT, parsePort } from "./defaults.js";
 import { requireDeviceToken } from "./device-auth.js";
 import {
   argvSchema,
@@ -232,28 +233,54 @@ function statusForError(error: unknown): number {
   return 400;
 }
 
-export function resolveAllowedHosts(): string[] | undefined {
-  const configured = process.env.VERONICA_ALLOWED_HOSTS;
-  if (configured === undefined) return undefined;
-  const hosts = [...new Set(configured.split(",").map(host => host.trim()).filter(Boolean))];
-  if (hosts.length === 0) throw new Error("VERONICA_ALLOWED_HOSTS must contain at least one hostname");
-  return hosts;
+function parseList(value: string, label: string): string[] {
+  const values = [...new Set(value.split(",").map(item => item.trim()).filter(Boolean))];
+  if (values.length === 0) throw new Error(`${label} must contain at least one value`);
+  return values;
 }
 
-export function resolveListenHosts(): string[] {
-  const configured = process.env.HOSTS ?? DEFAULT_HOST;
-  const hosts = [...new Set(configured.split(",").map(host => host.trim()).filter(Boolean))];
-  if (hosts.length === 0) throw new Error("HOSTS must contain at least one address");
-  return hosts;
+export function resolveAllowedHosts(
+  environment: NodeJS.ProcessEnv = process.env,
+  config: GatewayConfig = {}
+): string[] | undefined {
+  const configured = environment.VERONICA_ALLOWED_HOSTS;
+  if (configured !== undefined) return parseList(configured, "VERONICA_ALLOWED_HOSTS");
+  return config.allowedHosts;
+}
+
+export function resolveListenHosts(
+  environment: NodeJS.ProcessEnv = process.env,
+  config: GatewayConfig = {}
+): string[] {
+  const configured = environment.VERONICA_HOSTS ?? environment.HOSTS;
+  if (configured !== undefined) return parseList(configured, "VERONICA_HOSTS");
+  return config.hosts ?? [DEFAULT_HOST];
+}
+
+export function resolvePort(environment: NodeJS.ProcessEnv = process.env, config: GatewayConfig = {}): number {
+  const raw = environment.VERONICA_PORT ?? environment.PORT;
+  return raw === undefined ? (config.port ?? DEFAULT_PORT) : parsePort(raw, "VERONICA_PORT");
+}
+
+export function resolveDeviceToken(environment: NodeJS.ProcessEnv = process.env, config: GatewayConfig = {}): string {
+  const token = environment.VERONICA_DEVICE_TOKEN ?? config.deviceToken;
+  if (!token || token.length < 32) {
+    throw new Error("Run `veronica init gateway` or set VERONICA_DEVICE_TOKEN to at least 32 random characters");
+  }
+  return token;
 }
 
 export interface GatewayOptions {
   deviceToken: string;
+  host?: string;
+  allowedHosts?: string[];
 }
 
 export function createGatewayApp(options: GatewayOptions, broker = new Broker()) {
-  const host = resolveListenHosts()[0];
-  const app = createMcpExpressApp({ host, allowedHosts: resolveAllowedHosts() });
+  const app = createMcpExpressApp({
+    host: options.host ?? DEFAULT_HOST,
+    allowedHosts: options.allowedHosts
+  });
   app.use(express.json({ limit: "2mb" }));
 
   app.get("/healthz", (_req, res) => res.json({ ok: true, service: "veronica" }));
@@ -323,22 +350,30 @@ export function createGatewayApp(options: GatewayOptions, broker = new Broker())
   return app;
 }
 
-export function startServer() {
-  const deviceToken = process.env.VERONICA_DEVICE_TOKEN;
-  if (!deviceToken || deviceToken.length < 32) {
-    throw new Error("VERONICA_DEVICE_TOKEN must be set to a random value of at least 32 characters");
-  }
+export type StartServerOptions = {
+  environment?: NodeJS.ProcessEnv;
+  config?: GatewayConfig;
+};
 
-  const hosts = resolveListenHosts();
-  const port = Number.parseInt(process.env.PORT ?? String(DEFAULT_PORT), 10);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid PORT: ${process.env.PORT}`);
+export function startServer(options: StartServerOptions = {}) {
+  const environment = options.environment ?? process.env;
+  const config = options.config ?? {};
+  const deviceToken = resolveDeviceToken(environment, config);
+  const hosts = resolveListenHosts(environment, config);
+  const port = resolvePort(environment, config);
+  const allowedHosts = resolveAllowedHosts(environment, config);
+  const app = createGatewayApp({ deviceToken, host: hosts[0], allowedHosts });
 
-  const app = createGatewayApp({ deviceToken });
   return hosts.map(host =>
     app.listen(port, host, () => {
       console.error(`Veronica gateway listening on http://${host}:${port}`);
     })
   );
+}
+
+export async function startConfiguredServer(): Promise<ReturnType<typeof startServer>> {
+  const config = await readConfig();
+  return startServer({ config: config.gateway });
 }
 
 export function isMainModule(
@@ -350,4 +385,9 @@ export function isMainModule(
   return canonicalize(path.resolve(entrypoint)) === canonicalize(fileURLToPath(moduleUrl));
 }
 
-if (isMainModule(process.argv[1], import.meta.url)) startServer();
+if (isMainModule(process.argv[1], import.meta.url)) {
+  startConfiguredServer().catch(error => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

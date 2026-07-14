@@ -14,8 +14,6 @@ The gateway provides six MCP tools: `list_devices`, `open_workspace`, `read_file
 
 Node.js 20 or newer is required on the gateway and workers.
 
-Install the published command-line tools:
-
 ```bash
 npm install --global @ariobarin/veronica
 ```
@@ -26,52 +24,52 @@ For a one-off invocation without a global install:
 npx --yes @ariobarin/veronica --help
 ```
 
-The package provides the `veronica` command and keeps `veronica-gateway` as a compatibility alias.
+The package provides the `veronica` command and keeps `veronica-gateway` as a compatibility alias. On Windows, npm's global command directory is usually `%APPDATA%\npm`.
 
-To work from a repository checkout instead:
+## Configure and start a gateway
 
-```bash
-git clone https://github.com/ariobarin/veronica.git
-cd veronica
-npm ci --ignore-scripts
-npm run check
-npm link
-```
-
-On Windows, npm's global command directory is usually `%APPDATA%\npm`.
-
-## Start a gateway
-
-Generate one shared worker token, choose the loopback and private-network listener addresses, and start the gateway:
+Create a protected configuration file. The command generates a 256-bit worker token and prints it once so it can be transferred through a protected channel:
 
 ```bash
-export VERONICA_DEVICE_TOKEN="$(openssl rand -hex 32)"
-export HOSTS="127.0.0.1,10.20.0.1"
-export PORT="39100"
-export VERONICA_ALLOWED_HOSTS="veronica.example.com,10.20.0.1,127.0.0.1,localhost"
+veronica init gateway \
+  --hosts "127.0.0.1,10.20.0.1" \
+  --port 39100 \
+  --allowed-hosts "veronica.example.com,10.20.0.1,127.0.0.1,localhost"
 veronica gateway
 ```
 
-`veronica-gateway` remains available for existing service definitions.
+The configuration is stored in `~/.config/veronica/config.json` on Unix-like systems or `%APPDATA%\Veronica\config.json` on Windows. Set `VERONICA_CONFIG` to use another path. Environment variables override saved values; the namespaced gateway variables are `VERONICA_HOSTS`, `VERONICA_PORT`, `VERONICA_ALLOWED_HOSTS`, and `VERONICA_DEVICE_TOKEN`. Legacy `HOSTS` and `PORT` remain supported.
 
-The `/mcp` endpoint has no application-level authentication. Put it behind an access-controlled private tunnel, VPN, or reverse proxy that authenticates the intended MCP client. Never publish it as an anonymous internet endpoint.
+`veronica-gateway` remains available for existing service definitions and reads the same configuration.
 
-Expose only `/mcp` and optionally `/healthz` through that trusted transport. Keep `/device/*` and the gateway port on an operator-controlled private network.
+The `/mcp` endpoint has no application-level authentication. Put it behind an access-controlled private tunnel, VPN, or reverse proxy that authenticates the intended MCP client. Never publish it as an anonymous internet endpoint. Expose only `/mcp` and optionally `/healthz` through that trusted transport. Keep `/device/*` and the gateway port on an operator-controlled private network.
 
 The complete listener, proxy, service, upgrade, and rollback procedure is in [docs/deployment.md](docs/deployment.md).
 
-## Connect a worker
+## Configure and connect a worker
 
-Load the worker token from a protected source, enter a Git worktree, and start the worker:
+Prompt for the token without echoing it or placing it in shell history, then save it through the protected configuration writer:
 
 ```bash
-export VERONICA_GATEWAY="http://10.20.0.1:39100"
-export VERONICA_TOKEN="<worker token>"
-cd "$HOME/code/project"
-veronica --name laptop
+read -rsp "Worker token: " VERONICA_TOKEN
+echo
+export VERONICA_TOKEN
+veronica init worker \
+  --gateway "http://10.20.0.1:39100" \
+  --name laptop
+unset VERONICA_TOKEN
 ```
 
-With no path, `veronica` selects the current Git worktree root. `veronica expose` is an equivalent explicit form. Outside a Git worktree, pass a directory. Home and filesystem roots require `--allow-broad-root`.
+For non-interactive provisioning, pass `--token-file` only when the source file already has appropriately restricted permissions. Empty token files are rejected rather than falling back to older credentials.
+
+Then enter a Git worktree and expose it:
+
+```bash
+cd "$HOME/code/project"
+veronica
+```
+
+`VERONICA_GATEWAY` and `VERONICA_TOKEN` override saved worker settings. With no path, `veronica` selects the current Git worktree root. `veronica expose` is an equivalent explicit form. Outside a Git worktree, pass a directory. Home and filesystem roots require `--allow-broad-root`.
 
 The worker prints the canonical exposed root before connecting. Stop it with `Ctrl+C`.
 
@@ -103,6 +101,18 @@ Call `list_devices` only when device selection is ambiguous. Device results incl
 
 It also accepts optional standard input and reports spawn errors, output truncation, and timeouts in structured fields.
 
+## Development from source
+
+```bash
+git clone https://github.com/ariobarin/veronica.git
+cd veronica
+npm ci --ignore-scripts
+npm run check
+npm link
+```
+
+Read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before changing boundaries. Run `npm run test:coverage` before proposing runtime changes.
+
 ## Design and operations
 
 - [PHILOSOPHY.md](PHILOSOPHY.md) defines the durable design boundaries.
@@ -110,16 +120,6 @@ It also accepts optional standard input and reports spawn errors, output truncat
 - [SECURITY.md](SECURITY.md) states the trust model and known limitations.
 - [docs/deployment.md](docs/deployment.md) is the provider-neutral deployment guide.
 - [docs/deployment-acceptance.md](docs/deployment-acceptance.md) is the production verification checklist.
-
-## Development
-
-Read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before changing boundaries.
-
-```bash
-npm ci --ignore-scripts
-npm run check
-npm run test:coverage
-```
 
 ## License
 
