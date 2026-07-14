@@ -1,6 +1,6 @@
 {
   "name": "@ariobarin/veronica",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "Expose a local coding workspace to an agent through a small remote gateway.",
   "type": "module",
   "license": "MIT",
