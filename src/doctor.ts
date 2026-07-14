@@ -20,6 +20,7 @@ export type DoctorOptions = {
   platform?: NodeJS.Platform;
   environment?: NodeJS.ProcessEnv;
   fetcher?: typeof fetch;
+  requestTimeoutMs?: number;
 };
 
 async function configChecks(file: string, platform: NodeJS.Platform): Promise<DoctorCheck[]> {
@@ -54,27 +55,28 @@ async function configChecks(file: string, platform: NodeJS.Platform): Promise<Do
   }
 }
 
-async function fetchWithTimeout(
-  fetcher: typeof fetch,
-  input: URL,
-  init: RequestInit = {}
-): Promise<Response> {
+async function withRequestTimeout<T>(
+  timeoutMs: number,
+  operation: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3_000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetcher(input, { ...init, signal: controller.signal });
+    return await operation(controller.signal);
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function healthCheck(gateway: string, fetcher: typeof fetch): Promise<DoctorCheck> {
+async function healthCheck(gateway: string, fetcher: typeof fetch, timeoutMs: number): Promise<DoctorCheck> {
   try {
-    const response = await fetchWithTimeout(fetcher, new URL("/healthz", gateway));
-    if (!response.ok) return { name: "gateway health", ok: false, detail: `HTTP ${response.status}` };
-    const value = (await response.json()) as { ok?: unknown; service?: unknown };
-    const ok = value.ok === true && value.service === "veronica";
-    return { name: "gateway health", ok, detail: ok ? gateway : "unexpected health response" };
+    return await withRequestTimeout(timeoutMs, async signal => {
+      const response = await fetcher(new URL("/healthz", gateway), { signal });
+      if (!response.ok) return { name: "gateway health", ok: false, detail: `HTTP ${response.status}` };
+      const value = (await response.json()) as { ok?: unknown; service?: unknown };
+      const ok = value.ok === true && value.service === "veronica";
+      return { name: "gateway health", ok, detail: ok ? gateway : "unexpected health response" };
+    });
   } catch (error) {
     return {
       name: "gateway health",
@@ -87,28 +89,33 @@ async function healthCheck(gateway: string, fetcher: typeof fetch): Promise<Doct
 async function workerAuthenticationCheck(
   gateway: string,
   token: string | undefined,
-  fetcher: typeof fetch
+  fetcher: typeof fetch,
+  timeoutMs: number
 ): Promise<DoctorCheck> {
   if (!token) return { name: "worker authentication", ok: false, detail: "worker token is missing" };
   try {
-    const response = await fetchWithTimeout(fetcher, new URL("/device/poll", gateway), {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json"
-      },
-      body: "{}"
+    const status = await withRequestTimeout(timeoutMs, async signal => {
+      const response = await fetcher(new URL("/device/poll", gateway), {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json"
+        },
+        body: "{}",
+        signal
+      });
+      return response.status;
     });
-    if (response.status === 400) {
+    if (status === 400) {
       return { name: "worker authentication", ok: true, detail: "token accepted by gateway" };
     }
-    if (response.status === 401 || response.status === 403) {
-      return { name: "worker authentication", ok: false, detail: `token rejected with HTTP ${response.status}` };
+    if (status === 401 || status === 403) {
+      return { name: "worker authentication", ok: false, detail: `token rejected with HTTP ${status}` };
     }
     return {
       name: "worker authentication",
       ok: false,
-      detail: `unexpected HTTP ${response.status}; use the private worker gateway URL`
+      detail: `unexpected HTTP ${status}; use the private worker gateway URL`
     };
   } catch (error) {
     return {
@@ -198,6 +205,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorCheck[]> 
   const major = Number.parseInt((options.nodeVersion ?? process.versions.node).split(".")[0] ?? "0", 10);
   const rootMetadata = await stat(options.root);
   const fetcher = options.fetcher ?? fetch;
+  const requestTimeoutMs = options.requestTimeoutMs ?? 3_000;
   let gateway = options.gateway;
   let gatewayConfigurationCheck: DoctorCheck | undefined;
   try {
@@ -220,8 +228,8 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorCheck[]> 
     await listenerCheck(options)
   ];
   if (gatewayConfigurationCheck) checks.push(gatewayConfigurationCheck);
-  checks.push(await healthCheck(gateway, fetcher));
-  checks.push(await workerAuthenticationCheck(gateway, options.workerToken, fetcher));
+  checks.push(await healthCheck(gateway, fetcher, requestTimeoutMs));
+  checks.push(await workerAuthenticationCheck(gateway, options.workerToken, fetcher, requestTimeoutMs));
   return checks;
 }
 
