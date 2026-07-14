@@ -20,7 +20,13 @@ Install the published command-line tools:
 npm install --global @ariobarin/veronica
 ```
 
-This installs the `veronica` worker command and the `veronica-gateway` gateway command.
+For a one-off invocation without a global install:
+
+```bash
+npx --yes @ariobarin/veronica --help
+```
+
+The package provides the `veronica` worker command and the `veronica-gateway` gateway command.
 
 To work from a repository checkout instead:
 
