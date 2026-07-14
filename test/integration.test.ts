@@ -6,7 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { Broker } from "../src/broker.js";
-import { resolveOAuthConfig } from "../src/auth.js";
 import { createGatewayApp } from "../src/server.js";
 import { runWorker } from "../src/worker.js";
 
@@ -27,23 +26,8 @@ test("gateway routes real workspace operations through a polling worker", async 
   const canonicalRoot = await realpath(root);
   await writeFile(path.join(root, "README.md"), "hello", "utf8");
   const broker = new Broker();
-  const oauth = resolveOAuthConfig({
-    VERONICA_OAUTH_ISSUER: "https://tenant.example.com/",
-    VERONICA_OAUTH_RESOURCE: "https://veronica.example.com/"
-  });
   const token = "d".repeat(32);
-  const app = createGatewayApp(
-    {
-      deviceToken: token,
-      oauth,
-      verifier: {
-        async verifyAccessToken() {
-          throw new Error("OAuth is not used by this worker integration test");
-        }
-      }
-    },
-    broker
-  );
+  const app = createGatewayApp({ deviceToken: token }, broker);
   const listener = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve, reject) => {
     listener.once("listening", resolve);
