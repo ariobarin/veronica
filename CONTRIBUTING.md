@@ -5,7 +5,7 @@ Veronica is intentionally small. Start by reading `PHILOSOPHY.md`, `AGENTS.md`, 
 Before opening a pull request:
 
 ```bash
-npm install --ignore-scripts
+npm ci --ignore-scripts
 npm run check
 ```
 

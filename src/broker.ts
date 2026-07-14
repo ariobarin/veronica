@@ -10,7 +10,6 @@ type DeviceRecord = {
   name: string;
   platform: string;
   rootLabel: string;
-  registeredAt: number;
   lastSeenAt: number;
   queue: DeviceJob[];
   wakePoll?: () => void;
@@ -27,7 +26,6 @@ type WorkspaceRecord = {
   id: string;
   deviceId: string;
   path: string;
-  createdAt: number;
 };
 
 export type DeviceSummary = {
@@ -84,7 +82,6 @@ export class Broker {
       name,
       platform,
       rootLabel,
-      registeredAt: now,
       lastSeenAt: now,
       queue: []
     });
@@ -151,8 +148,7 @@ export class Broker {
     const workspace: WorkspaceRecord = {
       id: randomUUID(),
       deviceId: device.id,
-      path,
-      createdAt: this.now()
+      path
     };
     this.workspaces.set(workspace.id, workspace);
     return { id: workspace.id, deviceId: workspace.deviceId, path: workspace.path };

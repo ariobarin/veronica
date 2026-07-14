@@ -13,12 +13,14 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "check": "npm run build && npm test",
+    "check": "npm run build && npm test && npm run check:package",
     "dev": "tsx src/cli.ts",
     "dev:gateway": "tsx src/server.ts",
     "start": "node dist/server.js",
     "test": "node scripts/run-tests.mjs",
-    "test:coverage": "node scripts/run-tests.mjs --coverage"
+    "test:coverage": "node scripts/run-tests.mjs --coverage",
+    "prepack": "npm run build",
+    "check:package": "node scripts/check-package.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
@@ -31,5 +33,11 @@
     "@types/node": "24.10.1",
     "tsx": "4.20.6",
     "typescript": "5.9.3"
-  }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md"
+  ]
 }
