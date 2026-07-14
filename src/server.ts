@@ -10,7 +10,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod/v4";
 import { Broker } from "./broker.js";
 import { readConfig, type GatewayConfig } from "./config.js";
-import { DEFAULT_HOST, DEFAULT_PORT } from "./defaults.js";
+import { DEFAULT_HOST, DEFAULT_PORT, parsePort } from "./defaults.js";
 import { requireDeviceToken } from "./device-auth.js";
 import {
   argvSchema,
@@ -259,10 +259,7 @@ export function resolveListenHosts(
 
 export function resolvePort(environment: NodeJS.ProcessEnv = process.env, config: GatewayConfig = {}): number {
   const raw = environment.VERONICA_PORT ?? environment.PORT;
-  if (raw === undefined) return config.port ?? DEFAULT_PORT;
-  const port = Number.parseInt(raw, 10);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid VERONICA_PORT: ${raw}`);
-  return port;
+  return raw === undefined ? (config.port ?? DEFAULT_PORT) : parsePort(raw, "VERONICA_PORT");
 }
 
 export function resolveDeviceToken(environment: NodeJS.ProcessEnv = process.env, config: GatewayConfig = {}): string {
