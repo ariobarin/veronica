@@ -17,7 +17,11 @@ test("doctor verifies a healthy private worker path", async t => {
   const root = path.join(directory, "repo");
   t.after(() => rm(directory, { recursive: true, force: true }));
   await mkdir(root);
-  await writeFile(configPath, "{}\n", { mode: 0o600 });
+  await writeFile(
+    configPath,
+    `${JSON.stringify({ gateway: { deviceToken: "d".repeat(32), hosts: ["127.0.0.1"] } })}\n`,
+    { mode: 0o600 }
+  );
   if (process.platform !== "win32") await chmod(configPath, 0o600);
 
   const fetcher: typeof fetch = async (input, init) => {
@@ -39,6 +43,7 @@ test("doctor verifies a healthy private worker path", async t => {
     fetcher
   });
   assert.equal(checks.every(check => check.ok), true);
+  assert.equal(checks.find(check => check.name === "gateway listeners")?.skipped, undefined);
   assert.match(formatDoctorChecks(checks), /✓ worker authentication: token accepted/);
 });
 
@@ -53,15 +58,47 @@ test("doctor exposes unsafe listeners, missing credentials, and failed health", 
     root,
     gateway: "http://127.0.0.1:39100",
     gatewayHosts: ["0.0.0.0"],
+    environment: { VERONICA_HOSTS: "0.0.0.0" },
     nodeVersion: "18.0.0",
     fetcher: async () => new Response("unavailable", { status: 503 })
   });
   assert.equal(checks.find(check => check.name === "Node.js")?.ok, false);
-  assert.equal(checks.find(check => check.name === "config")?.ok, true);
+  assert.equal(checks.find(check => check.name === "config")?.skipped, true);
   assert.equal(checks.find(check => check.name === "gateway listeners")?.ok, false);
   assert.equal(checks.find(check => check.name === "gateway health")?.ok, false);
   assert.equal(checks.find(check => check.name === "worker authentication")?.ok, false);
   assert.match(formatDoctorChecks(checks), /✗ worker authentication: worker token is missing/);
+});
+
+test("doctor marks listener safety unknown on a worker-only machine", async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "veronica-doctor-worker-"));
+  const configPath = path.join(directory, "config.json");
+  const root = path.join(directory, "repo");
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(root);
+  await writeFile(
+    configPath,
+    `${JSON.stringify({ worker: { token: "worker-token", gateway: "http://private.test" } })}\n`,
+    { mode: 0o600 }
+  );
+
+  const fetcher: typeof fetch = async input => {
+    const url = requestUrl(input);
+    if (url.pathname === "/healthz") return Response.json({ ok: true, service: "veronica" });
+    return Response.json({ error: { code: "invalid_request" } }, { status: 400 });
+  };
+  const checks = await runDoctor({
+    configPath,
+    root,
+    gateway: "http://private.test",
+    gatewayHosts: ["127.0.0.1"],
+    workerToken: "worker-token",
+    fetcher
+  });
+  const listeners = checks.find(check => check.name === "gateway listeners");
+  assert.equal(listeners?.ok, true);
+  assert.equal(listeners?.skipped, true);
+  assert.match(formatDoctorChecks(checks), /- gateway listeners: not configured on this machine/);
 });
 
 test("doctor reports a rejected worker token", async t => {
@@ -79,7 +116,6 @@ test("doctor reports a rejected worker token", async t => {
     configPath: path.join(directory, "missing.json"),
     root,
     gateway: "http://127.0.0.1:39100",
-    gatewayHosts: ["127.0.0.1"],
     workerToken: "wrong-token",
     fetcher
   });
