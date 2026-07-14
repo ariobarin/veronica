@@ -26,7 +26,7 @@ For a one-off invocation without a global install:
 npx --yes @ariobarin/veronica --help
 ```
 
-The package provides the `veronica` worker command and the `veronica-gateway` gateway command.
+The package provides the `veronica` command and keeps `veronica-gateway` as a compatibility alias.
 
 To work from a repository checkout instead:
 
@@ -49,8 +49,10 @@ export VERONICA_DEVICE_TOKEN="$(openssl rand -hex 32)"
 export HOSTS="127.0.0.1,10.20.0.1"
 export PORT="39100"
 export VERONICA_ALLOWED_HOSTS="veronica.example.com,10.20.0.1,127.0.0.1,localhost"
-veronica-gateway
+veronica gateway
 ```
+
+`veronica-gateway` remains available for existing service definitions.
 
 The `/mcp` endpoint has no application-level authentication. Put it behind an access-controlled private tunnel, VPN, or reverse proxy that authenticates the intended MCP client. Never publish it as an anonymous internet endpoint.
 
@@ -66,10 +68,10 @@ Load the worker token from a protected source, enter a Git worktree, and start t
 export VERONICA_GATEWAY="http://10.20.0.1:39100"
 export VERONICA_TOKEN="<worker token>"
 cd "$HOME/code/project"
-veronica expose --name laptop
+veronica --name laptop
 ```
 
-With no path, `veronica expose` selects the current Git worktree root. Outside a Git worktree, pass an explicit directory. Home and filesystem roots require `--allow-broad-root`.
+With no path, `veronica` selects the current Git worktree root. `veronica expose` is an equivalent explicit form. Outside a Git worktree, pass a directory. Home and filesystem roots require `--allow-broad-root`.
 
 The worker prints the canonical exposed root before connecting. Stop it with `Ctrl+C`.
 
