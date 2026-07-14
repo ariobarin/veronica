@@ -1,0 +1,76 @@
+name: Prepare tolerant doctor
+
+on:
+  push:
+    branches: [cleanup/doctor-local-v2]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cleanup/doctor-local-v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Patch doctor startup
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const replaceOnce = (value, before, after, label) => {
+            const first = value.indexOf(before);
+            if (first < 0 || value.indexOf(before, first + before.length) >= 0) throw new Error(`Expected one ${label}`);
+            return value.slice(0, first) + after + value.slice(first + before.length);
+          };
+
+          let cli = fs.readFileSync('src/cli.ts', 'utf8');
+          cli = replaceOnce(
+            cli,
+            'async function doctor(args: string[], config: VeronicaConfig): Promise<void> {\n  const options = parseDoctorArgs(args);\n  const selected = await resolveExposeRoot(options.root, { allowBroadRoot: options.allowBroadRoot });\n  const gateway = process.env.VERONICA_GATEWAY ?? config.worker?.gateway ?? DEFAULT_GATEWAY;\n  const workerToken = process.env.VERONICA_TOKEN ?? config.worker?.token;\n  const configPath = resolveConfigPath();\n',
+            'async function doctor(args: string[]): Promise<void> {\n  const options = parseDoctorArgs(args);\n  const selected = await resolveExposeRoot(options.root, { allowBroadRoot: options.allowBroadRoot });\n  const configPath = resolveConfigPath();\n  let config: VeronicaConfig = {};\n  try {\n    config = await readConfig(configPath);\n  } catch {\n    // The diagnostic layer reports the malformed or unreadable config.\n  }\n  const gateway = process.env.VERONICA_GATEWAY ?? config.worker?.gateway ?? DEFAULT_GATEWAY;\n  const workerToken = process.env.VERONICA_TOKEN ?? config.worker?.token;\n',
+            'doctor function prelude'
+          );
+          cli = replaceOnce(
+            cli,
+            '  const config = await readConfig();\n  if (command.kind === "gateway") {\n',
+            '  if (command.kind === "doctor") {\n    await doctor(command.args);\n    return;\n  }\n\n  const config = await readConfig();\n  if (command.kind === "gateway") {\n',
+            'config read before gateway'
+          );
+          cli = replaceOnce(
+            cli,
+            '  if (command.kind === "doctor") {\n    await doctor(command.args, config);\n    return;\n  }\n  await expose(command.args, config);\n',
+            '  await expose(command.args, config);\n',
+            'old doctor main branch'
+          );
+          fs.writeFileSync('src/cli.ts', cli);
+
+          let doctor = fs.readFileSync('src/doctor.ts', 'utf8');
+          doctor = replaceOnce(
+            doctor,
+            '    const metadata = await stat(file);\n    const checks: DoctorCheck[] = [{ name: "config", ok: metadata.isFile(), detail: file }];\n    if (platform !== "win32") {\n',
+            '    const metadata = await stat(file);\n    let configCheck: DoctorCheck = { name: "config", ok: metadata.isFile(), detail: file };\n    try {\n      await readConfig(file);\n    } catch (error) {\n      configCheck = {\n        name: "config",\n        ok: false,\n        detail: error instanceof Error ? error.message : String(error)\n      };\n    }\n    const checks: DoctorCheck[] = [configCheck];\n    if (platform !== "win32") {\n',
+            'config parse check'
+          );
+          fs.writeFileSync('src/doctor.ts', doctor);
+
+          let test = fs.readFileSync('test/doctor.test.ts', 'utf8');
+          if (!test.includes('doctor reports malformed saved configuration')) {
+            test += `\n\ntest("doctor reports malformed saved configuration", async t => {\n  const directory = await mkdtemp(path.join(os.tmpdir(), "veronica-doctor-malformed-"));\n  const configPath = path.join(directory, "config.json");\n  const root = path.join(directory, "repo");\n  t.after(() => rm(directory, { recursive: true, force: true }));\n  await mkdir(root);\n  await writeFile(configPath, "{not-json", { mode: 0o600 });\n\n  const checks = await runDoctor({\n    configPath,\n    root,\n    gateway: "http://127.0.0.1:39100",\n    workerToken: "worker-token",\n    fetcher: async input => {\n      const url = requestUrl(input);\n      if (url.pathname === "/healthz") return Response.json({ ok: true, service: "veronica" });\n      return Response.json({ error: { code: "invalid_request" } }, { status: 400 });\n    }\n  });\n\n  assert.equal(checks.find(check => check.name === "config")?.ok, false);\n  assert.equal(checks.find(check => check.name === "gateway listeners")?.ok, false);\n  assert.match(formatDoctorChecks(checks), /Invalid Veronica config JSON/);\n});\n`;
+          }
+          fs.writeFileSync('test/doctor.test.ts', test);
+          NODE
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - name: Commit tolerant diagnostics
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/cli.ts src/doctor.ts test/doctor.test.ts
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "report malformed doctor config"
+          git push origin HEAD:cleanup/doctor-local-v2
