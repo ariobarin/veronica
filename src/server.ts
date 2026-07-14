@@ -37,7 +37,7 @@ import {
   writeFileValueSchema
 } from "./protocol.js";
 
-const oauthSecuritySchemes = [{ type: "oauth2", scopes: ["veronica:read", "veronica:write"] }] as const;
+const oauthSecuritySchemes = [{ type: "oauth2", scopes: ["veronica:access"] }] as const;
 const oauthToolMeta = { securitySchemes: oauthSecuritySchemes };
 
 function jsonResult(value: Record<string, unknown>) {
@@ -255,7 +255,7 @@ export function resolveAllowedHosts(): string[] | undefined {
 }
 
 export function resolveListenHosts(): string[] {
-  const configured = process.env.HOSTS ?? process.env.HOST ?? "127.0.0.1";
+  const configured = process.env.HOSTS ?? "127.0.0.1";
   const hosts = [...new Set(configured.split(",").map(host => host.trim()).filter(Boolean))];
   if (hosts.length === 0) throw new Error("HOSTS must contain at least one address");
   return hosts;
@@ -352,7 +352,7 @@ export function createGatewayApp(auth: GatewayAuthOptions, broker = new Broker()
 }
 
 export function startServer() {
-  const deviceToken = process.env.VERONICA_DEVICE_TOKEN ?? process.env.VERONICA_TOKEN;
+  const deviceToken = process.env.VERONICA_DEVICE_TOKEN;
   if (!deviceToken || deviceToken.length < 32) {
     throw new Error("VERONICA_DEVICE_TOKEN must be set to a random value of at least 32 characters");
   }

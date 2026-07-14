@@ -53,7 +53,6 @@ Approved environment shape:
 
 ```dotenv
 VERONICA_OAUTH_ISSUER=https://dev-fl2h5xhp6umeh74m.us.auth0.com/
-VERONICA_OAUTH_AUDIENCE=https://veronica.ariobarin.com/
 VERONICA_OAUTH_RESOURCE=https://veronica.ariobarin.com/
 HOSTS=127.0.0.1,10.0.0.1
 PORT=39100
@@ -69,7 +68,7 @@ Auth0 tenant:
 - Issuer: `https://dev-fl2h5xhp6umeh74m.us.auth0.com/`
 - API identifier: `https://veronica.ariobarin.com/`
 - Signing algorithm: RS256
-- Permissions: `veronica:read` and `veronica:write`
+- Permission: `veronica:access`
 - RBAC: enabled
 - Permissions in access tokens: enabled
 - Resource Parameter Compatibility: enabled
@@ -82,7 +81,7 @@ ChatGPT uses this Client ID Metadata Document:
 https://chatgpt.com/oauth/8GVAEQJB-leg/client.json
 ```
 
-Its imported Auth0 client ID is `tpc_aNu3zb62GrA4zYj4BnmK6v`. The client grant and the authorized user both need the two Veronica permissions. The Google connection must be enabled for this client.
+Its imported Auth0 client ID is `tpc_aNu3zb62GrA4zYj4BnmK6v`. The client grant and the authorized user both need the Veronica permission. The Google connection must be enabled for this client.
 
 The ChatGPT development app values are:
 

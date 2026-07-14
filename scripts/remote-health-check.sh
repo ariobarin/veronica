@@ -19,8 +19,7 @@ fi
 metadata="$(curl --fail --silent --show-error "$metadata_url")"
 if [[ "$metadata" != *"\"resource\":\"${expected_resource}\""* || \
   "$metadata" != *'"authorization_servers"'* || \
-  "$metadata" != *'"veronica:read"'* || \
-  "$metadata" != *'"veronica:write"'* ]]; then
+  "$metadata" != *'"veronica:access"'* ]]; then
   printf 'Unexpected OAuth resource metadata: %s\n' "$metadata" >&2
   exit 1
 fi
@@ -48,7 +47,7 @@ if [[ "$status" != "401" ]]; then
   exit 1
 fi
 challenge="$(tr -d '\r' < "$headers" | grep -i '^www-authenticate:' || true)"
-if [[ "$challenge" != *'scope="veronica:read veronica:write"'* || \
+if [[ "$challenge" != *'scope="veronica:access"'* || \
   "$challenge" != *"resource_metadata=\"${metadata_url}\""* ]]; then
   printf '%s\n' 'OAuth bearer challenge is missing scopes or resource metadata' >&2
   exit 1

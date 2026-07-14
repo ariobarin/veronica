@@ -22,7 +22,7 @@ Define these values before installing anything:
 | Purpose | Example |
 | --- | --- |
 | Public MCP origin | `https://veronica.example.com` |
-| OAuth resource and audience | `https://veronica.example.com/` |
+| OAuth resource and JWT audience | `https://veronica.example.com/` |
 | OAuth issuer | `https://identity.example.com/` |
 | Gateway loopback address | `127.0.0.1` |
 | Gateway private address | `10.20.0.1` |
@@ -30,11 +30,13 @@ Define these values before installing anything:
 | Worker name | `laptop` |
 | Exposed worker root | `/home/user/code` |
 
-Keep the public origin and OAuth resource distinct where the trailing slash matters. `VERONICA_OAUTH_AUDIENCE` must exactly equal `VERONICA_OAUTH_RESOURCE`.
+Keep the public origin and OAuth resource distinct where the trailing slash matters. Veronica uses the exact OAuth resource as the JWT audience.
 
 ## Configure the identity provider
 
-Create one API or protected resource with the two permissions `veronica:read` and `veronica:write`.
+Create one API or protected resource with the permission `veronica:access`.
+
+Existing deployments that issued only `veronica:read` and `veronica:write` must create and grant `veronica:access` before deploying this revision. Existing access tokens are not rewritten; obtain a fresh token after updating the client grant and user authorization.
 
 Veronica accepts access tokens that meet all of these conditions:
 
@@ -43,11 +45,11 @@ Veronica accepts access tokens that meet all of these conditions:
 - Exact configured audience
 - Unexpired `exp` claim
 - Client identifier in `client_id`, `azp`, or `sub`
-- Both permissions in the space separated `scope` claim or the `permissions` array
+- `veronica:access` in the space separated `scope` claim or the `permissions` array
 
 The provider must publish a JWKS endpoint over HTTPS. Veronica uses `<issuer>/.well-known/jwks.json` unless `VERONICA_OAUTH_JWKS_URI` is set.
 
-Remote MCP clients commonly use authorization code with PKCE. Some clients also require dynamic client registration or Client ID Metadata Document registration. Enable only the registration features required by the intended client, and grant the client and user both Veronica permissions.
+Remote MCP clients commonly use authorization code with PKCE. Some clients also require dynamic client registration or Client ID Metadata Document registration. Enable only the registration features required by the intended client, and grant the client and user the `veronica:access` permission.
 
 Do not configure an OAuth client secret in Veronica. The gateway validates access tokens but does not act as an OAuth client.
 
@@ -98,7 +100,6 @@ The environment should have this shape:
 ```dotenv
 VERONICA_DEVICE_TOKEN=<random value with at least 32 characters>
 VERONICA_OAUTH_ISSUER=https://identity.example.com/
-VERONICA_OAUTH_AUDIENCE=https://veronica.example.com/
 VERONICA_OAUTH_RESOURCE=https://veronica.example.com/
 HOSTS=127.0.0.1,10.20.0.1
 PORT=39100
