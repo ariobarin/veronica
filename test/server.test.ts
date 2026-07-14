@@ -3,7 +3,14 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { createGatewayApp, isMainModule, resolveListenHosts } from "../src/server.js";
+import {
+  createGatewayApp,
+  isMainModule,
+  resolveAllowedHosts,
+  resolveDeviceToken,
+  resolveListenHosts,
+  resolvePort
+} from "../src/server.js";
 
 test("server starts when the entrypoint resolves through a release symlink", () => {
   const symlinkPath = path.resolve("/opt/veronica/current/dist/server.js");
@@ -13,34 +20,41 @@ test("server starts when the entrypoint resolves through a release symlink", () 
   assert.equal(isMainModule(symlinkPath, pathToFileURL(releasePath).href, canonicalize), true);
 });
 
-test("listen hosts include distinct loopback and private addresses", () => {
-  const previousHosts = process.env.HOSTS;
-  const previousHost = process.env.HOST;
-  try {
-    process.env.HOSTS = "127.0.0.1, 10.0.0.1,127.0.0.1";
-    process.env.HOST = "192.0.2.1";
-    assert.deepEqual(resolveListenHosts(), ["127.0.0.1", "10.0.0.1"]);
-  } finally {
-    if (previousHosts === undefined) delete process.env.HOSTS;
-    else process.env.HOSTS = previousHosts;
-    if (previousHost === undefined) delete process.env.HOST;
-    else process.env.HOST = previousHost;
-  }
+test("gateway settings prefer namespaced environment values, then legacy values, then config", () => {
+  const config = {
+    deviceToken: "c".repeat(32),
+    hosts: ["10.0.0.2"],
+    port: 39102,
+    allowedHosts: ["configured.test"]
+  };
+  assert.deepEqual(resolveListenHosts({}, config), ["10.0.0.2"]);
+  assert.equal(resolvePort({}, config), 39102);
+  assert.equal(resolveDeviceToken({}, config), "c".repeat(32));
+  assert.deepEqual(resolveAllowedHosts({}, config), ["configured.test"]);
+
+  const environment = {
+    HOSTS: "10.0.0.3",
+    PORT: "39103",
+    VERONICA_HOSTS: "127.0.0.1,10.0.0.4,127.0.0.1",
+    VERONICA_PORT: "39104",
+    VERONICA_DEVICE_TOKEN: "e".repeat(32),
+    VERONICA_ALLOWED_HOSTS: "localhost, gateway.test"
+  };
+  assert.deepEqual(resolveListenHosts(environment, config), ["127.0.0.1", "10.0.0.4"]);
+  assert.equal(resolvePort(environment, config), 39104);
+  assert.equal(resolveDeviceToken(environment, config), "e".repeat(32));
+  assert.deepEqual(resolveAllowedHosts(environment, config), ["localhost", "gateway.test"]);
 });
 
 test("legacy HOST does not widen the default listener", () => {
-  const previousHosts = process.env.HOSTS;
-  const previousHost = process.env.HOST;
-  try {
-    delete process.env.HOSTS;
-    process.env.HOST = "0.0.0.0";
-    assert.deepEqual(resolveListenHosts(), ["127.0.0.1"]);
-  } finally {
-    if (previousHosts === undefined) delete process.env.HOSTS;
-    else process.env.HOSTS = previousHosts;
-    if (previousHost === undefined) delete process.env.HOST;
-    else process.env.HOST = previousHost;
-  }
+  assert.deepEqual(resolveListenHosts({ HOST: "0.0.0.0" }), ["127.0.0.1"]);
+});
+
+test("gateway settings reject empty lists, invalid ports, and missing tokens", () => {
+  assert.throws(() => resolveListenHosts({ VERONICA_HOSTS: " , " }), /at least one value/);
+  assert.throws(() => resolveAllowedHosts({ VERONICA_ALLOWED_HOSTS: "" }), /at least one value/);
+  assert.throws(() => resolvePort({ VERONICA_PORT: "70000" }), /Invalid VERONICA_PORT/);
+  assert.throws(() => resolveDeviceToken({}), /init gateway|VERONICA_DEVICE_TOKEN/);
 });
 
 function initializeBody() {
