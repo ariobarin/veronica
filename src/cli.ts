@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
+import { realpathSync } from "node:fs";
 import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { runWorker } from "./worker.js";
 
 function usage(): string {
@@ -15,19 +18,23 @@ Environment:
 `;
 }
 
-type ExposeOptions = {
+export type ExposeOptions = {
   root: string;
   name: string;
   gateway: string;
   token: string;
 };
 
-function parseExposeArgs(args: string[]): ExposeOptions {
+export function parseExposeArgs(
+  args: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+  hostname = os.hostname()
+): ExposeOptions {
   let root = ".";
   let rootSet = false;
-  let name = os.hostname();
-  let gateway = process.env.VERONICA_GATEWAY ?? "http://127.0.0.1:3000";
-  let token = process.env.VERONICA_TOKEN ?? "";
+  let name = hostname;
+  let gateway = environment.VERONICA_GATEWAY ?? "http://127.0.0.1:3000";
+  let token = environment.VERONICA_TOKEN ?? "";
 
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
@@ -49,15 +56,15 @@ function parseExposeArgs(args: string[]): ExposeOptions {
   return { root, name, gateway, token };
 }
 
-async function main() {
-  const [command, ...args] = process.argv.slice(2);
+export async function main(args = process.argv.slice(2)): Promise<void> {
+  const [command, ...commandArgs] = args;
   if (!command || command === "--help" || command === "-h") {
     console.log(usage());
     return;
   }
   if (command !== "expose") throw new Error(`Unknown command: ${command}\n\n${usage()}`);
 
-  const options = parseExposeArgs(args);
+  const options = parseExposeArgs(commandArgs);
   const controller = new AbortController();
   const stop = () => controller.abort();
   process.once("SIGINT", stop);
@@ -71,7 +78,18 @@ async function main() {
   }
 }
 
-main().catch(error => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+export function isCliMainModule(
+  entrypoint: string | undefined,
+  moduleUrl: string,
+  canonicalize: (value: string) => string = realpathSync
+): boolean {
+  if (!entrypoint) return false;
+  return canonicalize(path.resolve(entrypoint)) === canonicalize(fileURLToPath(moduleUrl));
+}
+
+if (isCliMainModule(process.argv[1], import.meta.url)) {
+  main().catch(error => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
