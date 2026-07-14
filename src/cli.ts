@@ -2,11 +2,20 @@
 
 import { execFile } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_GATEWAY } from "./defaults.js";
+import {
+  generateDeviceToken,
+  readConfig,
+  resolveConfigPath,
+  writeConfig,
+  type VeronicaConfig,
+  type WorkerConfig
+} from "./config.js";
+import { DEFAULT_GATEWAY, DEFAULT_HOST, DEFAULT_PORT } from "./defaults.js";
 import { canonicalizeRoot } from "./path-policy.js";
 import { runWorker } from "./worker.js";
 
@@ -19,17 +28,26 @@ Usage:
   veronica [path] [--name <name>] [--gateway <url>] [--allow-broad-root]
   veronica expose [path] [--name <name>] [--gateway <url>] [--allow-broad-root]
   veronica gateway
+  veronica init worker [--gateway <url>] [--name <name>] [--token-file <path>]
+  veronica init gateway [--hosts <list>] [--port <port>] [--allowed-hosts <list>]
   veronica --help
 
-Environment:
-  VERONICA_GATEWAY   Gateway URL, default ${DEFAULT_GATEWAY}
+Environment overrides:
+  VERONICA_CONFIG    Configuration file path
+  VERONICA_GATEWAY   Worker gateway URL
   VERONICA_TOKEN     Private worker bearer token
+  VERONICA_HOSTS     Gateway listener addresses
+  VERONICA_PORT      Gateway listener port
 
 With no command, Veronica exposes the current Git worktree root. Outside a Git worktree, pass an explicit path.
 `;
 }
 
-export type CliCommand = { kind: "help" } | { kind: "gateway" } | { kind: "expose"; args: string[] };
+export type CliCommand =
+  | { kind: "help" }
+  | { kind: "gateway" }
+  | { kind: "init"; args: string[] }
+  | { kind: "expose"; args: string[] };
 
 export function parseCliCommand(args: string[]): CliCommand {
   const [command, ...rest] = args;
@@ -38,6 +56,7 @@ export function parseCliCommand(args: string[]): CliCommand {
     if (rest.length > 0) throw new Error(`Unexpected gateway argument: ${rest[0]}`);
     return { kind: "gateway" };
   }
+  if (command === "init") return { kind: "init", args: rest };
   if (command === "expose") return { kind: "expose", args: rest };
   return { kind: "expose", args };
 }
@@ -53,12 +72,13 @@ export type ExposeOptions = {
 export function parseExposeArgs(
   args: string[],
   environment: NodeJS.ProcessEnv = process.env,
-  hostname = os.hostname()
+  hostname = os.hostname(),
+  configured: WorkerConfig = {}
 ): ExposeOptions {
   let root: string | undefined;
-  let name = hostname;
-  let gateway = environment.VERONICA_GATEWAY ?? DEFAULT_GATEWAY;
-  const token = environment.VERONICA_TOKEN ?? "";
+  let name = configured.name ?? hostname;
+  let gateway = environment.VERONICA_GATEWAY ?? configured.gateway ?? DEFAULT_GATEWAY;
+  const token = environment.VERONICA_TOKEN ?? configured.token ?? "";
   let allowBroadRoot = false;
 
   for (let index = 0; index < args.length; index++) {
@@ -79,7 +99,7 @@ export function parseExposeArgs(
     root = arg;
   }
 
-  if (!token) throw new Error("Set VERONICA_TOKEN before starting a worker");
+  if (!token) throw new Error("Run `veronica init worker` or set VERONICA_TOKEN before starting a worker");
   return { root, name, gateway, token, allowBroadRoot };
 }
 
@@ -154,8 +174,94 @@ export async function resolveExposeRoot(
   };
 }
 
-async function expose(args: string[]): Promise<void> {
-  const options = parseExposeArgs(args);
+function parseList(value: string, option: string): string[] {
+  const values = [...new Set(value.split(",").map(item => item.trim()).filter(Boolean))];
+  if (values.length === 0) throw new Error(`${option} must contain at least one value`);
+  return values;
+}
+
+export type InitOptions =
+  | { target: "worker"; gateway?: string; name?: string; tokenFile?: string }
+  | { target: "gateway"; hosts?: string[]; port?: number; allowedHosts?: string[] };
+
+export function parseInitArgs(args: string[]): InitOptions {
+  const [target, ...rest] = args;
+  if (target !== "worker" && target !== "gateway") {
+    throw new Error("Choose `veronica init worker` or `veronica init gateway`");
+  }
+
+  if (target === "worker") {
+    const result: Extract<InitOptions, { target: "worker" }> = { target };
+    for (let index = 0; index < rest.length; index++) {
+      const option = rest[index];
+      const value = rest[++index];
+      if (!value) throw new Error(`Missing value for ${option}`);
+      if (option === "--gateway") result.gateway = value;
+      else if (option === "--name") result.name = value;
+      else if (option === "--token-file") result.tokenFile = value;
+      else throw new Error(`Unknown worker init option: ${option}`);
+    }
+    return result;
+  }
+
+  const result: Extract<InitOptions, { target: "gateway" }> = { target };
+  for (let index = 0; index < rest.length; index++) {
+    const option = rest[index];
+    const value = rest[++index];
+    if (!value) throw new Error(`Missing value for ${option}`);
+    if (option === "--hosts") result.hosts = parseList(value, option);
+    else if (option === "--allowed-hosts") result.allowedHosts = parseList(value, option);
+    else if (option === "--port") {
+      const port = Number.parseInt(value, 10);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid port: ${value}`);
+      result.port = port;
+    } else throw new Error(`Unknown gateway init option: ${option}`);
+  }
+  return result;
+}
+
+export async function initializeConfig(
+  options: InitOptions,
+  environment: NodeJS.ProcessEnv = process.env,
+  file = resolveConfigPath({ environment })
+): Promise<{ config: VeronicaConfig; generatedToken?: string }> {
+  const current = await readConfig(file);
+  if (options.target === "worker") {
+    const tokenFromFile = options.tokenFile === undefined ? undefined : (await readFile(options.tokenFile, "utf8")).trim();
+    const token = tokenFromFile || environment.VERONICA_TOKEN || current.worker?.token;
+    if (!token) {
+      throw new Error("Set VERONICA_TOKEN or pass --token-file when initializing a worker");
+    }
+    const config: VeronicaConfig = {
+      ...current,
+      worker: {
+        ...current.worker,
+        token,
+        gateway: options.gateway ?? current.worker?.gateway ?? DEFAULT_GATEWAY,
+        ...(options.name === undefined ? {} : { name: options.name })
+      }
+    };
+    await writeConfig(config, file);
+    return { config };
+  }
+
+  const generatedToken = environment.VERONICA_DEVICE_TOKEN || current.gateway?.deviceToken || generateDeviceToken();
+  const config: VeronicaConfig = {
+    ...current,
+    gateway: {
+      ...current.gateway,
+      deviceToken: generatedToken,
+      hosts: options.hosts ?? current.gateway?.hosts ?? [DEFAULT_HOST],
+      port: options.port ?? current.gateway?.port ?? DEFAULT_PORT,
+      ...(options.allowedHosts === undefined ? {} : { allowedHosts: options.allowedHosts })
+    }
+  };
+  await writeConfig(config, file);
+  return { config, generatedToken };
+}
+
+async function expose(args: string[], config: VeronicaConfig): Promise<void> {
+  const options = parseExposeArgs(args, process.env, os.hostname(), config.worker);
   const selected = await resolveExposeRoot(options.root, { allowBroadRoot: options.allowBroadRoot });
   const controller = new AbortController();
   const stop = () => controller.abort();
@@ -183,12 +289,21 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     console.log(usage());
     return;
   }
-  if (command.kind === "gateway") {
-    const { startServer } = await import("./server.js");
-    startServer();
+  if (command.kind === "init") {
+    const file = resolveConfigPath();
+    const result = await initializeConfig(parseInitArgs(command.args), process.env, file);
+    console.error(`Saved Veronica configuration to ${file}`);
+    if (result.generatedToken) console.log(`VERONICA_TOKEN=${result.generatedToken}`);
     return;
   }
-  await expose(command.args);
+
+  const config = await readConfig();
+  if (command.kind === "gateway") {
+    const { startServer } = await import("./server.js");
+    startServer({ config: config.gateway });
+    return;
+  }
+  await expose(command.args, config);
 }
 
 export function isCliMainModule(
