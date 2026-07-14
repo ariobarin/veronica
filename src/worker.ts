@@ -204,8 +204,8 @@ export async function executeWorkerRequest(root: string, request: WorkerRequest)
 
   if (request.type === "write_file") {
     const file = await resolveWritePath(workspace, request.path);
-    await mkdir(path.dirname(file), { recursive: true });
     if (request.expectedSha256) await assertExpectedHash(file, request.expectedSha256);
+    await mkdir(path.dirname(file), { recursive: true });
     await replaceFileAtomically(file, request.content);
     return {
       bytesWritten: Buffer.byteLength(request.content, "utf8"),

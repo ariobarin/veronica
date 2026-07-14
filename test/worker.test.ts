@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -56,6 +56,21 @@ test("worker executes file and command requests inside a workspace", async t => 
   assert.equal(await readFile(path.join(root, "README.md"), "utf8"), "updated");
   assert.equal((await readdir(root)).some(entry => entry.endsWith(".tmp")), false);
 
+  await assert.rejects(
+    executeWorkerRequest(root, {
+      type: "write_file",
+      workspace: ".",
+      path: "missing/guarded.txt",
+      content: "replacement",
+      expectedSha256: sha256("missing")
+    }),
+    error => error instanceof Error && "code" in error && error.code === "conflict"
+  );
+  await assert.rejects(
+    access(path.join(root, "missing")),
+    error => error instanceof Error && "code" in error && error.code === "ENOENT"
+  );
+
   const longName = `${"x".repeat(220)}.txt`;
   await executeWorkerRequest(root, {
     type: "write_file",
@@ -77,22 +92,24 @@ test("worker executes file and command requests inside a workspace", async t => 
     });
     assert.equal((await stat(executable)).mode & 0o777, 0o751);
 
-    const readOnly = path.join(root, "read-only.txt");
-    await writeFile(readOnly, "original", "utf8");
-    await chmod(readOnly, 0o444);
-    await assert.rejects(
-      executeWorkerRequest(root, {
-        type: "write_file",
-        workspace: ".",
-        path: "read-only.txt",
-        content: "replacement"
-      }),
-      error =>
-        error instanceof Error &&
-        "code" in error &&
-        (error.code === "EACCES" || error.code === "EPERM")
-    );
-    assert.equal(await readFile(readOnly, "utf8"), "original");
+    if (process.getuid?.() !== 0) {
+      const readOnly = path.join(root, "read-only.txt");
+      await writeFile(readOnly, "original", "utf8");
+      await chmod(readOnly, 0o444);
+      await assert.rejects(
+        executeWorkerRequest(root, {
+          type: "write_file",
+          workspace: ".",
+          path: "read-only.txt",
+          content: "replacement"
+        }),
+        error =>
+          error instanceof Error &&
+          "code" in error &&
+          (error.code === "EACCES" || error.code === "EPERM")
+      );
+      assert.equal(await readFile(readOnly, "utf8"), "original");
+    }
   }
 
   const command = (await executeWorkerRequest(root, {
