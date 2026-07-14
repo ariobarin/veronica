@@ -69,7 +69,6 @@ export async function writeConfig(config: VeronicaConfig, file = resolveConfigPa
   const validated = veronicaConfigSchema.parse(config);
   const directory = path.dirname(file);
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") await chmod(directory, 0o700);
 
   const temporary = path.join(directory, `.${path.basename(file)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
   try {
