@@ -15,7 +15,7 @@ import {
   type VeronicaConfig,
   type WorkerConfig
 } from "./config.js";
-import { DEFAULT_GATEWAY, DEFAULT_HOST, DEFAULT_PORT } from "./defaults.js";
+import { DEFAULT_GATEWAY, DEFAULT_HOST, DEFAULT_PORT, parsePort } from "./defaults.js";
 import { canonicalizeRoot } from "./path-policy.js";
 import { runWorker } from "./worker.js";
 
@@ -211,11 +211,8 @@ export function parseInitArgs(args: string[]): InitOptions {
     if (!value) throw new Error(`Missing value for ${option}`);
     if (option === "--hosts") result.hosts = parseList(value, option);
     else if (option === "--allowed-hosts") result.allowedHosts = parseList(value, option);
-    else if (option === "--port") {
-      const port = Number.parseInt(value, 10);
-      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`Invalid port: ${value}`);
-      result.port = port;
-    } else throw new Error(`Unknown gateway init option: ${option}`);
+    else if (option === "--port") result.port = parsePort(value);
+    else throw new Error(`Unknown gateway init option: ${option}`);
   }
   return result;
 }
