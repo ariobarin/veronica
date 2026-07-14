@@ -54,6 +54,7 @@ OAuth protects the public MCP endpoint. The gateway verifies access token signat
 - Shell commands inherit the worker's environment.
 - Shell execution is not isolated from the rest of the user account.
 - Timed-out commands use operating system process-tree termination, but abrupt termination can still leave application-level state partially written.
+- Unix termination discovers current descendants by parent PID as well as process group. A process that fully daemonizes and reparents before discovery can still escape; use a container or virtual machine when that boundary matters.
 - Gateway expiry prevents queued work from starting late, but it does not cancel a command that already started.
 - MCP disconnects do not yet cancel worker jobs.
 - Revision checks detect stale content observed before replacement but are not a cross-process file-locking system.

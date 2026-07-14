@@ -224,6 +224,41 @@ test("command execution reports spawn errors without throwing", async t => {
   assert.equal(result.timedOut, false);
 });
 
+test("Unix timeout terminates descendants in a new session", { skip: process.platform !== "linux" }, async t => {
+  const rootInput = await mkdtemp(path.join(os.tmpdir(), "veronica-setsid-"));
+  t.after(() => rm(rootInput, { recursive: true, force: true }));
+  const root = await canonicalizeRoot(rootInput);
+  const marker = path.join(root, "setsid-descendant-survived.txt");
+  const script = path.join(root, "escaped.sh");
+  const quotedMarker = marker.replaceAll("'", "'\''");
+  await writeFile(
+    script,
+    `#!/bin/sh
+trap '' TERM
+sleep 2
+printf alive > '${quotedMarker}'
+sleep 10
+`,
+    "utf8"
+  );
+  await chmod(script, 0o755);
+  const quotedScript = script.replaceAll("'", "'\''");
+  const startedAt = Date.now();
+  const result = (await executeWorkerRequest(root, {
+    type: "run_command",
+    workspace: ".",
+    shellCommand: `setsid '${quotedScript}'`,
+    timeoutSeconds: 1
+  })) as { timedOut: boolean; spawnError: string | null };
+
+  assert.equal(result.timedOut, true);
+  assert.equal(result.spawnError, null);
+  assert.ok(Date.now() - startedAt >= 1_400);
+  assert.ok(Date.now() - startedAt < 5_000);
+  await new Promise(resolve => setTimeout(resolve, 2_500));
+  await assert.rejects(access(marker), error => error instanceof Error && "code" in error && error.code === "ENOENT");
+});
+
 test("worker abort terminates the active command process tree", async t => {
   const rootInput = await mkdtemp(path.join(os.tmpdir(), "veronica-abort-"));
   t.after(() => rm(rootInput, { recursive: true, force: true }));

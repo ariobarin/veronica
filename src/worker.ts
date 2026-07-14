@@ -132,6 +132,64 @@ function commandInvocation(
   return { file: "/bin/sh", args: ["-c", request.shellCommand] };
 }
 
+async function listUnixDescendants(rootPid: number): Promise<number[]> {
+  return await new Promise(resolve => {
+    const scanner = spawn("ps", ["-A", "-o", "pid=,ppid="], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    const chunks: Buffer[] = [];
+    let capturedBytes = 0;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      const children = new Map<number, number[]>();
+      for (const line of Buffer.concat(chunks).toString("utf8").split(/\r?\n/)) {
+        const [pidText, parentText] = line.trim().split(/\s+/);
+        const pid = Number.parseInt(pidText ?? "", 10);
+        const parent = Number.parseInt(parentText ?? "", 10);
+        if (!Number.isInteger(pid) || !Number.isInteger(parent)) continue;
+        const siblings = children.get(parent) ?? [];
+        siblings.push(pid);
+        children.set(parent, siblings);
+      }
+
+      const descendants: number[] = [];
+      const seen = new Set<number>([rootPid]);
+      const stack = [rootPid];
+      while (stack.length > 0) {
+        const parent = stack.pop();
+        if (parent === undefined) break;
+        for (const child of children.get(parent) ?? []) {
+          if (seen.has(child)) continue;
+          seen.add(child);
+          descendants.push(child);
+          stack.push(child);
+        }
+      }
+      resolve(descendants);
+    };
+    scanner.stdout.on("data", (chunk: Buffer) => {
+      const remaining = MAX_TEXT_BYTES - capturedBytes;
+      if (remaining <= 0) return;
+      const accepted = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+      chunks.push(accepted);
+      capturedBytes += accepted.length;
+    });
+    scanner.on("error", () => resolve([]));
+    scanner.on("close", finish);
+  });
+}
+
+function trySignal(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // The process already exited or is not signalable by this worker.
+  }
+}
+
 async function terminateProcessTree(pid: number | undefined): Promise<void> {
   if (!pid) return;
   if (process.platform === "win32") {
@@ -147,11 +205,7 @@ async function terminateProcessTree(pid: number | undefined): Promise<void> {
         resolve();
       };
       killer.on("error", () => {
-        try {
-          process.kill(pid);
-        } catch {
-          // The process already exited.
-        }
+        trySignal(pid, "SIGTERM");
         finish();
       });
       killer.on("close", finish);
@@ -159,26 +213,16 @@ async function terminateProcessTree(pid: number | undefined): Promise<void> {
     return;
   }
 
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      return;
-    }
-  }
+  const descendants = new Set(await listUnixDescendants(pid));
+  for (const descendant of [...descendants].reverse()) trySignal(descendant, "SIGTERM");
+  trySignal(-pid, "SIGTERM");
+  trySignal(pid, "SIGTERM");
 
-  await new Promise<void>(resolve => {
-    setTimeout(() => {
-      try {
-        process.kill(-pid, "SIGKILL");
-      } catch {
-        // The process group already exited.
-      }
-      resolve();
-    }, 500);
-  });
+  await new Promise<void>(resolve => setTimeout(resolve, 500));
+  for (const descendant of await listUnixDescendants(pid)) descendants.add(descendant);
+  for (const descendant of [...descendants].reverse()) trySignal(descendant, "SIGKILL");
+  trySignal(-pid, "SIGKILL");
+  trySignal(pid, "SIGKILL");
 }
 
 async function runCommand(cwd: string, request: RunCommandRequest, signal?: AbortSignal) {
@@ -211,7 +255,11 @@ async function runCommand(cwd: string, request: RunCommandRequest, signal?: Abor
     let timer: NodeJS.Timeout | undefined;
 
     const startTermination = () => {
-      termination ??= terminateProcessTree(child.pid);
+      termination ??= terminateProcessTree(child.pid).finally(() => {
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+      });
       return termination;
     };
     const abort = () => {
