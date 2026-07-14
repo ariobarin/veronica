@@ -48,16 +48,19 @@ The complete listener, proxy, service, upgrade, and rollback procedure is in [do
 
 ## Configure and connect a worker
 
-Save the gateway URL and worker token without placing the token in shell history:
+Prompt for the token without echoing it or placing it in shell history, then save it through the protected configuration writer:
 
 ```bash
-printf '%s\n' '<worker token>' > /path/to/protected-token
+read -rsp "Worker token: " VERONICA_TOKEN
+echo
+export VERONICA_TOKEN
 veronica init worker \
   --gateway "http://10.20.0.1:39100" \
-  --name laptop \
-  --token-file /path/to/protected-token
-rm /path/to/protected-token
+  --name laptop
+unset VERONICA_TOKEN
 ```
+
+For non-interactive provisioning, pass `--token-file` only when the source file already has appropriately restricted permissions. Empty token files are rejected rather than falling back to older credentials.
 
 Then enter a Git worktree and expose it:
 
