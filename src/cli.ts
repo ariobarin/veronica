@@ -224,8 +224,13 @@ export async function initializeConfig(
 ): Promise<{ config: VeronicaConfig; generatedToken?: string }> {
   const current = await readConfig(file);
   if (options.target === "worker") {
-    const tokenFromFile = options.tokenFile === undefined ? undefined : (await readFile(options.tokenFile, "utf8")).trim();
-    const token = tokenFromFile || environment.VERONICA_TOKEN || current.worker?.token;
+    let token: string | undefined;
+    if (options.tokenFile !== undefined) {
+      token = (await readFile(options.tokenFile, "utf8")).trim();
+      if (!token) throw new Error(`Worker token file is empty: ${options.tokenFile}`);
+    } else {
+      token = environment.VERONICA_TOKEN || current.worker?.token;
+    }
     if (!token) {
       throw new Error("Set VERONICA_TOKEN or pass --token-file when initializing a worker");
     }
