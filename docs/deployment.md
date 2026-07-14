@@ -45,11 +45,11 @@ Veronica accepts access tokens that meet all of these conditions:
 - Exact configured audience
 - Unexpired `exp` claim
 - Client identifier in `client_id`, `azp`, or `sub`
-- Both permissions in the space separated `scope` claim or the `permissions` array
+- `veronica:access` in the space separated `scope` claim or the `permissions` array
 
 The provider must publish a JWKS endpoint over HTTPS. Veronica uses `<issuer>/.well-known/jwks.json` unless `VERONICA_OAUTH_JWKS_URI` is set.
 
-Remote MCP clients commonly use authorization code with PKCE. Some clients also require dynamic client registration or Client ID Metadata Document registration. Enable only the registration features required by the intended client, and grant the client and user both Veronica permissions.
+Remote MCP clients commonly use authorization code with PKCE. Some clients also require dynamic client registration or Client ID Metadata Document registration. Enable only the registration features required by the intended client, and grant the client and user the `veronica:access` permission.
 
 Do not configure an OAuth client secret in Veronica. The gateway validates access tokens but does not act as an OAuth client.
 
