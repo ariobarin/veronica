@@ -30,6 +30,7 @@ import {
   workerErrorSchema,
   writeFileValueSchema
 } from "./protocol.js";
+import { VERONICA_VERSION } from "./version.js";
 
 function jsonResult(value: Record<string, unknown>) {
   return {
@@ -50,7 +51,7 @@ function errorResult(error: unknown) {
 
 export function createVeronicaMcpServer(broker: Broker): McpServer {
   const server = new McpServer(
-    { name: "veronica", version: "0.0.0" },
+    { name: "veronica", version: VERONICA_VERSION },
     {
       instructions: [
         "Veronica routes a small set of coding operations to explicitly exposed local workspaces.",
