@@ -61,7 +61,7 @@ Opening a workspace asks the worker to verify that the directory exists. Every l
 
 ### Job
 
-A job is one request routed to one device. Each job carries an expiry time. The gateway removes queued jobs when their caller times out, and the worker rejects a job that expired before execution began. Late results for expired jobs are ignored.
+A job is one request routed to one device. The gateway removes work that is still queued when its caller times out. Work already delivered to a worker may continue because cancellation is not yet implemented; any result returned after the caller timeout is ignored.
 
 ## Current protocol
 

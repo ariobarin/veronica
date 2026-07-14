@@ -76,6 +76,23 @@ test("worker executes file and command requests inside a workspace", async t => 
       content: "#!/bin/sh\nprintf preserved\n"
     });
     assert.equal((await stat(executable)).mode & 0o777, 0o751);
+
+    const readOnly = path.join(root, "read-only.txt");
+    await writeFile(readOnly, "original", "utf8");
+    await chmod(readOnly, 0o444);
+    await assert.rejects(
+      executeWorkerRequest(root, {
+        type: "write_file",
+        workspace: ".",
+        path: "read-only.txt",
+        content: "replacement"
+      }),
+      error =>
+        error instanceof Error &&
+        "code" in error &&
+        (error.code === "EACCES" || error.code === "EPERM")
+    );
+    assert.equal(await readFile(readOnly, "utf8"), "original");
   }
 
   const command = (await executeWorkerRequest(root, {

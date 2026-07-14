@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import { spawn } from "node:child_process";
-import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod/v4";
 import {
@@ -163,7 +163,12 @@ async function replaceFileAtomically(file: string, content: string): Promise<voi
   const temporary = path.join(path.dirname(file), `.veronica-${randomUUID()}.tmp`);
   let existingMode: number | undefined;
   try {
-    existingMode = (await stat(file)).mode;
+    const existing = await open(file, "r+");
+    try {
+      existingMode = (await existing.stat()).mode;
+    } finally {
+      await existing.close();
+    }
   } catch (error) {
     const code = error instanceof Error && "code" in error ? String(error.code) : undefined;
     if (code !== "ENOENT") throw error;
