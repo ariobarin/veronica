@@ -120,11 +120,16 @@ async function workerAuthenticationCheck(
 
 async function listenerCheck(options: DoctorOptions): Promise<DoctorCheck> {
   const environment = options.environment ?? process.env;
-  const configuredByEnvironment = environment.VERONICA_HOSTS !== undefined || environment.HOSTS !== undefined;
+  const configuredByEnvironment =
+    environment.VERONICA_HOSTS !== undefined ||
+    environment.HOSTS !== undefined ||
+    environment.VERONICA_PORT !== undefined ||
+    environment.PORT !== undefined;
   let configuredByFile = false;
   if (!configuredByEnvironment) {
     try {
-      configuredByFile = (await readConfig(options.configPath)).gateway?.hosts !== undefined;
+      const gateway = (await readConfig(options.configPath)).gateway;
+      configuredByFile = gateway?.hosts !== undefined || gateway?.port !== undefined;
     } catch (error) {
       return {
         name: "gateway listeners",
@@ -159,31 +164,43 @@ function formatHost(host: string): string {
 export async function resolveDoctorGateway(options: DoctorOptions): Promise<string> {
   const environment = options.environment ?? process.env;
   if (environment.VERONICA_GATEWAY) return environment.VERONICA_GATEWAY;
+
+  let config;
   try {
-    const config = await readConfig(options.configPath);
-    if (config.worker?.gateway) return config.worker.gateway;
-    const gatewayConfigured =
-      config.gateway !== undefined ||
-      environment.VERONICA_HOSTS !== undefined ||
-      environment.HOSTS !== undefined ||
-      environment.VERONICA_PORT !== undefined ||
-      environment.PORT !== undefined;
-    if (!gatewayConfigured) return options.gateway;
-    const hosts = options.gatewayHosts ?? config.gateway?.hosts ?? [DEFAULT_HOST];
-    const host = hosts.includes(DEFAULT_HOST) ? DEFAULT_HOST : (hosts[0] ?? DEFAULT_HOST);
-    const rawPort = environment.VERONICA_PORT ?? environment.PORT;
-    const port = rawPort === undefined ? (config.gateway?.port ?? DEFAULT_PORT) : parsePort(rawPort);
-    return `http://${formatHost(host)}:${port}`;
+    config = await readConfig(options.configPath);
   } catch {
     return options.gateway;
   }
+  if (config.worker?.gateway) return config.worker.gateway;
+  const gatewayConfigured =
+    config.gateway !== undefined ||
+    environment.VERONICA_HOSTS !== undefined ||
+    environment.HOSTS !== undefined ||
+    environment.VERONICA_PORT !== undefined ||
+    environment.PORT !== undefined;
+  if (!gatewayConfigured) return options.gateway;
+  const hosts = options.gatewayHosts ?? config.gateway?.hosts ?? [DEFAULT_HOST];
+  const host = hosts.includes(DEFAULT_HOST) ? DEFAULT_HOST : (hosts[0] ?? DEFAULT_HOST);
+  const rawPort = environment.VERONICA_PORT ?? environment.PORT;
+  const port = rawPort === undefined ? (config.gateway?.port ?? DEFAULT_PORT) : parsePort(rawPort);
+  return `http://${formatHost(host)}:${port}`;
 }
 
 export async function runDoctor(options: DoctorOptions): Promise<DoctorCheck[]> {
   const major = Number.parseInt((options.nodeVersion ?? process.versions.node).split(".")[0] ?? "0", 10);
   const rootMetadata = await stat(options.root);
   const fetcher = options.fetcher ?? fetch;
-  const gateway = await resolveDoctorGateway(options);
+  let gateway = options.gateway;
+  let gatewayConfigurationCheck: DoctorCheck | undefined;
+  try {
+    gateway = await resolveDoctorGateway(options);
+  } catch (error) {
+    gatewayConfigurationCheck = {
+      name: "gateway configuration",
+      ok: false,
+      detail: error instanceof Error ? error.message : String(error)
+    };
+  }
   const checks: DoctorCheck[] = [
     {
       name: "Node.js",
@@ -194,6 +211,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorCheck[]> 
     { name: "workspace root", ok: rootMetadata.isDirectory(), detail: options.root },
     await listenerCheck(options)
   ];
+  if (gatewayConfigurationCheck) checks.push(gatewayConfigurationCheck);
   checks.push(await healthCheck(gateway, fetcher));
   checks.push(await workerAuthenticationCheck(gateway, options.workerToken, fetcher));
   return checks;
