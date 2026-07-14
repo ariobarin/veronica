@@ -1,0 +1,54 @@
+name: Prune stale branches
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  prune:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Delete closed and staging branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          preserve="$(mktemp)"
+          printf '%s\n' main cleanup/systemd-service-v2 > "$preserve"
+          gh pr list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --state open \
+            --json headRefName \
+            --jq '.[].headRefName' >> "$preserve"
+          sort -u -o "$preserve" "$preserve"
+
+          git ls-remote --heads origin \
+            | awk '{ sub("refs/heads/", "", $2); print $2 }' \
+            | while IFS= read -r branch; do
+                if grep -Fxq "$branch" "$preserve"; then
+                  echo "Keeping $branch"
+                  continue
+                fi
+                echo "Deleting $branch"
+                git push origin --delete "$branch" || echo "::warning::Could not delete $branch"
+              done
+
+      - name: Remove this one-time workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/prune-stale-branches.yml
+          git commit -m "Remove one-time branch pruner"
+          git push origin HEAD:main
