@@ -71,6 +71,24 @@ test("worker executes file and command requests inside a workspace", async t => 
     error => error instanceof Error && "code" in error && error.code === "ENOENT"
   );
 
+  const largeFile = path.join(root, "large.txt");
+  await writeFile(largeFile, "x".repeat(1024 * 1024 + 1), "utf8");
+  await assert.rejects(
+    executeWorkerRequest(root, {
+      type: "write_file",
+      workspace: ".",
+      path: "large.txt",
+      content: "replacement",
+      expectedSha256: sha256("irrelevant")
+    }),
+    error =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "invalid_request" &&
+      /exceeds the 1 MiB limit/.test(error.message)
+  );
+  assert.equal((await stat(largeFile)).size, 1024 * 1024 + 1);
+
   const longName = `${"x".repeat(220)}.txt`;
   await executeWorkerRequest(root, {
     type: "write_file",

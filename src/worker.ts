@@ -146,6 +146,17 @@ async function readTextFile(file: string): Promise<{ content: string; sha256: st
 }
 
 async function assertExpectedHash(file: string, expectedSha256: string): Promise<void> {
+  let metadata;
+  try {
+    metadata = await stat(file);
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String(error.code) : undefined;
+    if (code === "ENOENT") throw new VeronicaError("conflict", "File does not exist at the expected revision");
+    throw error;
+  }
+  if (!metadata.isFile()) throw new VeronicaError("invalid_request", "Expected revision path is not a file");
+  if (metadata.size > MAX_TEXT_BYTES) throw new VeronicaError("invalid_request", "File exceeds the 1 MiB limit");
+
   let current: Buffer;
   try {
     current = await readFile(file);
@@ -154,6 +165,7 @@ async function assertExpectedHash(file: string, expectedSha256: string): Promise
     if (code === "ENOENT") throw new VeronicaError("conflict", "File does not exist at the expected revision");
     throw error;
   }
+  if (current.length > MAX_TEXT_BYTES) throw new VeronicaError("invalid_request", "File exceeds the 1 MiB limit");
   if (sha256(current) !== expectedSha256) {
     throw new VeronicaError("conflict", "File changed since it was read");
   }
