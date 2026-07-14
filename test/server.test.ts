@@ -3,9 +3,6 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import { resolveOAuthConfig } from "../src/auth.js";
 import { createGatewayApp, isMainModule, resolveListenHosts } from "../src/server.js";
 
 test("server starts when the entrypoint resolves through a release symlink", () => {
@@ -16,7 +13,7 @@ test("server starts when the entrypoint resolves through a release symlink", () 
   assert.equal(isMainModule(symlinkPath, pathToFileURL(releasePath).href, canonicalize), true);
 });
 
-test("listen hosts include distinct loopback and WireGuard addresses", () => {
+test("listen hosts include distinct loopback and private addresses", () => {
   const previousHosts = process.env.HOSTS;
   const previousHost = process.env.HOST;
   try {
@@ -46,24 +43,22 @@ test("legacy HOST does not widen the default listener", () => {
   }
 });
 
-test("gateway separates public OAuth from private device authentication", async t => {
-  const oauth = resolveOAuthConfig({
-    VERONICA_OAUTH_ISSUER: "https://tenant.example.com/",
-    VERONICA_OAUTH_RESOURCE: "https://veronica.example.com/"
-  });
-  const verifier = {
-    async verifyAccessToken(token: string): Promise<AuthInfo> {
-      if (token !== "oauth-token" && token !== "wrong-scope-token") throw new InvalidTokenError("invalid token");
-      return {
-        token,
-        clientId: "chatgpt",
-        scopes: token === "wrong-scope-token" ? [] : [...oauth.scopes],
-        expiresAt: Math.floor(Date.now() / 1000) + 300,
-        resource: oauth.resource
-      };
+function initializeBody() {
+  return JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "test-client", version: "1.0.0" }
     }
-  };
-  const app = createGatewayApp({ deviceToken: "d".repeat(32), oauth, verifier });
+  });
+}
+
+test("gateway leaves MCP client admission to the transport and protects device routes", async t => {
+  const deviceToken = "d".repeat(32);
+  const app = createGatewayApp({ deviceToken });
   const listener = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve, reject) => {
     listener.once("listening", resolve);
@@ -75,73 +70,46 @@ test("gateway separates public OAuth from private device authentication", async 
   const health = await fetch(`${baseUrl}/healthz`);
   assert.equal(health.status, 200);
 
-  const metadata = await fetch(`${baseUrl}/.well-known/oauth-protected-resource`);
-  assert.equal(metadata.status, 200);
-  assert.deepEqual(await metadata.json(), {
-    resource: "https://veronica.example.com/",
-    authorization_servers: ["https://tenant.example.com/"],
-    bearer_methods_supported: ["header"],
-    scopes_supported: ["veronica:access"]
-  });
-
-  const challenge = await fetch(`${baseUrl}/mcp`, { method: "POST" });
-  assert.equal(challenge.status, 401);
-  assert.match(challenge.headers.get("www-authenticate") ?? "", /scope="veronica:access"/);
-  assert.match(
-    challenge.headers.get("www-authenticate") ?? "",
-    /resource_metadata="https:\/\/veronica\.example\.com\/\.well-known\/oauth-protected-resource"/
-  );
-
-  const deviceTokenOnMcp = await fetch(`${baseUrl}/mcp`, {
+  const initialize = await fetch(`${baseUrl}/mcp`, {
     method: "POST",
-    headers: { authorization: `Bearer ${"d".repeat(32)}` }
+    headers: {
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json"
+    },
+    body: initializeBody()
   });
-  assert.equal(deviceTokenOnMcp.status, 401);
+  assert.equal(initialize.status, 200);
+  assert.equal(initialize.headers.has("www-authenticate"), false);
 
-  const insufficientScope = await fetch(`${baseUrl}/mcp`, {
+  const arbitraryBearer = await fetch(`${baseUrl}/mcp`, {
     method: "POST",
-    headers: { authorization: "Bearer wrong-scope-token" }
+    headers: {
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+      authorization: "Bearer not-a-veronica-credential"
+    },
+    body: initializeBody()
   });
-  assert.equal(insufficientScope.status, 403);
+  assert.equal(arbitraryBearer.status, 200);
 
   const deviceDenied = await fetch(`${baseUrl}/device/register`, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: "Bearer oauth-token" },
-    body: JSON.stringify({ name: "test", platform: "win32", rootLabel: "repo" })
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "denied", platform: "win32", rootLabel: "repo" })
   });
   assert.equal(deviceDenied.status, 401);
 
   const deviceAccepted = await fetch(`${baseUrl}/device/register`, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${"d".repeat(32)}` },
+    headers: { "content-type": "application/json", authorization: `Bearer ${deviceToken}` },
     body: JSON.stringify({ name: "test", platform: "win32", rootLabel: "repo" })
   });
   assert.equal(deviceAccepted.status, 201);
 
   const legacyDeviceAccepted = await fetch(`${baseUrl}/device/register`, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${"d".repeat(32)}` },
+    headers: { "content-type": "application/json", authorization: `Bearer ${deviceToken}` },
     body: JSON.stringify({ name: "legacy", platform: "win32", hostname: "legacy-host" })
   });
   assert.equal(legacyDeviceAccepted.status, 201);
-
-  const initialize = await fetch(`${baseUrl}/mcp`, {
-    method: "POST",
-    headers: {
-      accept: "application/json, text/event-stream",
-      "content-type": "application/json",
-      authorization: "Bearer oauth-token"
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-03-26",
-        capabilities: {},
-        clientInfo: { name: "test-client", version: "1.0.0" }
-      }
-    })
-  });
-  assert.equal(initialize.status, 200);
 });

@@ -3,7 +3,7 @@
 Veronica exposes one local coding workspace to an existing agent harness through a small remote gateway.
 
 ```text
-agent -> OAuth-protected MCP gateway -> private worker connection -> local workspace
+agent -> access-controlled MCP transport -> Veronica gateway -> private worker connection -> local workspace
 ```
 
 The gateway provides six MCP tools: `list_devices`, `open_workspace`, `read_file`, `write_file`, `run_command`, and `close_workspace`. The worker makes outbound requests only, and filesystem enforcement happens on the computer that owns the files.
@@ -26,23 +26,21 @@ npm link
 
 ## Start a gateway
 
-Configure an OAuth protected resource whose identifier and JWT audience are the public Veronica resource URL. It must issue RS256 access tokens with the `veronica:access` scope.
-
-Existing deployments using only `veronica:read` and `veronica:write` must grant `veronica:access` before upgrading and obtain fresh access tokens afterward.
+Generate one shared worker token, choose the loopback and private-network listener addresses, and start the gateway:
 
 ```bash
 export VERONICA_DEVICE_TOKEN="$(openssl rand -hex 32)"
-export VERONICA_OAUTH_ISSUER="https://identity.example.com/"
-export VERONICA_OAUTH_RESOURCE="https://veronica.example.com/"
 export HOSTS="127.0.0.1,10.20.0.1"
 export PORT="39100"
 export VERONICA_ALLOWED_HOSTS="veronica.example.com,10.20.0.1,127.0.0.1,localhost"
-npm start
+veronica-gateway
 ```
 
-Publish only `/mcp`, `/healthz`, and `/.well-known/oauth-protected-resource` through HTTPS. Keep `/device/*` and the gateway port on an operator-controlled private network.
+The `/mcp` endpoint has no application-level authentication. Put it behind an access-controlled private tunnel, VPN, or reverse proxy that authenticates the intended MCP client. Never publish it as an anonymous internet endpoint.
 
-The complete listener, reverse-proxy, service, upgrade, and rollback procedure is in [docs/deployment.md](docs/deployment.md).
+Expose only `/mcp` and optionally `/healthz` through that trusted transport. Keep `/device/*` and the gateway port on an operator-controlled private network.
+
+The complete listener, proxy, service, upgrade, and rollback procedure is in [docs/deployment.md](docs/deployment.md).
 
 ## Connect a worker
 
@@ -61,7 +59,7 @@ The worker prints the canonical exposed root before connecting. Stop it with `Ct
 
 ## Use the MCP tools
 
-Connect an OAuth-capable MCP client to:
+Connect an MCP client through the trusted transport to:
 
 ```text
 https://veronica.example.com/mcp

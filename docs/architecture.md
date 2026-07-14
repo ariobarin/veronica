@@ -5,11 +5,11 @@
 ```text
 agent harness
     |
-    | OAuth-authenticated MCP over HTTPS
+    | MCP over an access-controlled HTTPS transport
     v
 Veronica gateway
     |
-    | authenticated HTTP polling over WireGuard
+    | device-token HTTP polling over a private network
     v
 veronica expose <directory>
     |
@@ -20,6 +20,10 @@ local files and shell
 ### Agent harness
 
 The harness owns the model, conversation, reasoning, tool scheduling, retries, and user interaction. Veronica only appears as an MCP tool provider.
+
+### Trusted transport
+
+Veronica does not authenticate MCP clients. An authenticated private tunnel, VPN, mutually authenticated proxy, or equivalent operator-controlled transport must decide which clients can reach `/mcp`. The gateway treats every request that reaches that endpoint as trusted.
 
 ### Gateway
 
@@ -35,7 +39,7 @@ GET  /healthz
 
 A restart forgets all devices, jobs, and workspaces. Workers reconnect automatically.
 
-Public MCP clients and private workers have separate authentication boundaries. MCP clients use OAuth access tokens issued for the Veronica resource with the `veronica:access` scope. Workers use a random device bearer token only across the operator-controlled WireGuard network. The shared device token is never accepted on `/mcp`.
+MCP clients and private workers have separate boundaries. Client admission happens before traffic reaches the gateway. Workers use a random device bearer token only across the operator-controlled private network. The shared device token is accepted only on `/device/*` and is not an MCP client credential.
 
 ### Worker
 
@@ -84,6 +88,8 @@ write_file
 run_command
 close_workspace
 ```
+
+The write and command tools are reported as non-read-only and destructive-capable. Tool metadata is descriptive, not a security boundary, but it must remain accurate so an agent harness can apply its own confirmation policy.
 
 ## Why long polling first
 

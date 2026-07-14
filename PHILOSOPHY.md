@@ -14,7 +14,7 @@ Veronica does not choose models, maintain conversations, plan work, compact cont
 
 ### The gateway routes but does not compute
 
-The gateway should remain suitable for a small relay VPS. It authenticates, discovers devices, creates short workspace leases, routes requests, and returns results. Repositories, builds, terminals, and credentials stay on the exposed computers.
+The gateway should remain suitable for a small relay VPS. It discovers devices, creates short workspace leases, routes requests, and returns results. Repositories, builds, terminals, and credentials stay on the exposed computers. MCP client admission belongs to the transport in front of the gateway.
 
 ### Exposure is explicit and temporary by default
 
@@ -31,6 +31,8 @@ The gateway is not trusted to widen access. Path containment, process policy, li
 ### Direct shell access is described honestly
 
 A shell running as a normal user can generally access that user's files, environment, credentials, network, and developer tools. Command filtering is not a sandbox. Strong isolation must come from a separate operating system account, container, VM, or similar boundary.
+
+Tool annotations must describe these effects honestly. A command or write operation must not be marked read-only to suppress a harness safety check.
 
 ### Start with completed operations
 
@@ -65,4 +67,4 @@ Before adding a feature, ask:
 
 ## Current deliberate limitations
 
-The prototype uses OAuth for MCP clients, one shared device token for workers, in-memory routing, long polling, one exposed root per worker, completed command output, and no sandbox. These are not claims about the final architecture. They are the smallest choices that test whether the core interaction is useful.
+The prototype has no built-in MCP client authentication, uses one shared device token for workers, keeps routing state in memory, uses long polling, exposes one root per worker, returns completed command output, and is not a sandbox. These are not claims about the final architecture. They are the smallest choices that test whether the core interaction is useful.
