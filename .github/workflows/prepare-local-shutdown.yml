@@ -1,0 +1,123 @@
+name: Prepare local shutdown fixes
+
+on:
+  push:
+    branches: [cleanup/doctor-local-v2]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cleanup/doctor-local-v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Patch local shutdown and doctor listener handling
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const replaceOnce = (value, before, after, label) => {
+            const first = value.indexOf(before);
+            if (first < 0 || value.indexOf(before, first + before.length) >= 0) throw new Error(`Expected one ${label}`);
+            return value.slice(0, first) + after + value.slice(first + before.length);
+          };
+
+          let broker = fs.readFileSync('src/broker.ts', 'utf8');
+          broker = replaceOnce(
+            broker,
+            '  registerDevice(name: string, platform: string, rootLabel = name): string {\n',
+            '  shutdown(reason = "Broker shut down"): void {\n    for (const deviceId of [...this.devices.keys()]) this.disconnectDevice(deviceId, reason);\n    for (const [jobId, pending] of this.pendingJobs) {\n      clearTimeout(pending.timer);\n      this.pendingJobs.delete(jobId);\n      pending.reject(new VeronicaError("unavailable", reason));\n    }\n    this.workspaces.clear();\n  }\n\n  registerDevice(name: string, platform: string, rootLabel = name): string {\n',
+            'broker registration method'
+          );
+          fs.writeFileSync('src/broker.ts', broker);
+
+          let local = fs.readFileSync('src/local.ts', 'utf8');
+          local = replaceOnce(local, 'import { generateDeviceToken } from "./config.js";\n', 'import { Broker } from "./broker.js";\nimport { generateDeviceToken } from "./config.js";\n', 'local imports');
+          local = replaceOnce(
+            local,
+            '  const token = generateDeviceToken();\n  const app = createGatewayApp({\n    deviceToken: token,\n    host: DEFAULT_HOST,\n    allowedHosts: [DEFAULT_HOST, "localhost"]\n  });\n',
+            '  const token = generateDeviceToken();\n  const broker = new Broker();\n  const app = createGatewayApp(\n    {\n      deviceToken: token,\n      host: DEFAULT_HOST,\n      allowedHosts: [DEFAULT_HOST, "localhost"]\n    },\n    broker\n  );\n',
+            'local app creation'
+          );
+          local = replaceOnce(
+            local,
+            '  const gatewayUrl = `http://${DEFAULT_HOST}:${(address as AddressInfo).port}`;\n  return {\n',
+            '  const gatewayUrl = `http://${DEFAULT_HOST}:${(address as AddressInfo).port}`;\n  let closed = false;\n  const close = async () => {\n    if (closed) return;\n    closed = true;\n    broker.shutdown("Local gateway stopped");\n    await new Promise<void>((resolve, reject) => {\n      server.close(error => (error ? reject(error) : resolve()));\n      server.closeAllConnections?.();\n    });\n  };\n  return {\n',
+            'local return prelude'
+          );
+          local = replaceOnce(
+            local,
+            '    server,\n    close: () => new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve())))\n',
+            '    server,\n    close\n',
+            'local close field'
+          );
+          fs.writeFileSync('src/local.ts', local);
+
+          let doctor = fs.readFileSync('src/doctor.ts', 'utf8');
+          doctor = replaceOnce(doctor, 'import { DEFAULT_HOST, DEFAULT_PORT, parsePort } from "./defaults.js";\n', 'import { DEFAULT_HOST, DEFAULT_PORT, parsePort } from "./defaults.js";\nimport { resolveListenHosts } from "./server.js";\n', 'doctor imports');
+          doctor = replaceOnce(
+            doctor,
+            '  const hosts = options.gatewayHosts;\n  if (!hosts || hosts.length === 0) {\n    return { name: "gateway listeners", ok: false, detail: "configured listener addresses could not be resolved" };\n  }\n',
+            '  let hosts: string[];\n  try {\n    const config = await readConfig(options.configPath);\n    hosts = options.gatewayHosts ?? resolveListenHosts(environment, config.gateway);\n  } catch (error) {\n    return {\n      name: "gateway listeners",\n      ok: false,\n      detail: error instanceof Error ? error.message : String(error)\n    };\n  }\n',
+            'listener host resolution'
+          );
+          doctor = replaceOnce(
+            doctor,
+            '  const hosts = options.gatewayHosts ?? config.gateway?.hosts ?? [DEFAULT_HOST];\n',
+            '  const hosts = options.gatewayHosts ?? resolveListenHosts(environment, config.gateway);\n',
+            'gateway probe hosts'
+          );
+          fs.writeFileSync('src/doctor.ts', doctor);
+
+          let cli = fs.readFileSync('src/cli.ts', 'utf8');
+          cli = replaceOnce(
+            cli,
+            '  const { formatDoctorChecks, runDoctor } = await import("./doctor.js");\n  const { resolveListenHosts } = await import("./server.js");\n  const checks = await runDoctor({\n',
+            '  const { formatDoctorChecks, runDoctor } = await import("./doctor.js");\n  const checks = await runDoctor({\n',
+            'doctor imports in CLI'
+          );
+          cli = replaceOnce(
+            cli,
+            '    gateway,\n    gatewayHosts: resolveListenHosts(process.env, config.gateway),\n    workerToken\n',
+            '    gateway,\n    workerToken\n',
+            'doctor listener input'
+          );
+          fs.writeFileSync('src/cli.ts', cli);
+
+          let brokerTest = fs.readFileSync('test/broker.test.ts', 'utf8');
+          if (!brokerTest.includes('broker shutdown rejects pending jobs')) {
+            brokerTest += `\n\ntest("broker shutdown rejects pending jobs", async () => {\n  const broker = new Broker();\n  broker.registerDevice("local", "test", "repo");\n  const pending = broker.openWorkspace(undefined, ".");\n  broker.shutdown("Local gateway stopped");\n  await assert.rejects(pending, /Local gateway stopped/);\n  assert.deepEqual(broker.listDevices(), []);\n});\n`;
+          }
+          fs.writeFileSync('test/broker.test.ts', brokerTest);
+
+          let localTest = fs.readFileSync('test/local.test.ts', 'utf8');
+          localTest = replaceOnce(
+            localTest,
+            '  assert.deepEqual(await health.json(), { ok: true, service: "veronica" });\n});\n',
+            '  assert.deepEqual(await health.json(), { ok: true, service: "veronica" });\n  await gateway.close();\n  await gateway.close();\n});\n',
+            'local health assertion'
+          );
+          fs.writeFileSync('test/local.test.ts', localTest);
+
+          let doctorTest = fs.readFileSync('test/doctor-port-error.test.ts', 'utf8');
+          if (!doctorTest.includes('doctor reports an empty host override')) {
+            doctorTest += `\n\ntest("doctor reports an empty host override and continues other checks", async t => {\n  const directory = await mkdtemp(path.join(os.tmpdir(), "veronica-doctor-bad-hosts-"));\n  const root = path.join(directory, "repo");\n  t.after(() => rm(directory, { recursive: true, force: true }));\n  await mkdir(root);\n\n  const checks = await runDoctor({\n    configPath: path.join(directory, "missing.json"),\n    root,\n    gateway: "http://127.0.0.1:39100",\n    workerToken: "worker-token",\n    environment: { VERONICA_HOSTS: "," },\n    fetcher: async input => {\n      const url = input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);\n      if (url.pathname === "/healthz") return Response.json({ ok: true, service: "veronica" });\n      return Response.json({ error: { code: "invalid_request" } }, { status: 400 });\n    }\n  });\n\n  assert.equal(checks.find(check => check.name === "gateway listeners")?.ok, false);\n  assert.equal(checks.find(check => check.name === "gateway configuration")?.ok, false);\n  assert.match(formatDoctorChecks(checks), /VERONICA_HOSTS must contain at least one value/);\n  assert.equal(checks.find(check => check.name === "gateway health")?.ok, true);\n  assert.equal(checks.find(check => check.name === "worker authentication")?.ok, true);\n});\n`;
+          }
+          fs.writeFileSync('test/doctor-port-error.test.ts', doctorTest);
+          NODE
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - name: Commit fixes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/broker.ts src/local.ts src/doctor.ts src/cli.ts test/broker.test.ts test/local.test.ts test/doctor-port-error.test.ts
+          git commit -m "cancel local jobs on shutdown"
+          git push origin HEAD:cleanup/doctor-local-v2
