@@ -145,11 +145,10 @@ The global npm command directory is `C:\Users\Administrator\AppData\Roaming\npm`
 Connect Windows to the `wg-relay` WireGuard tunnel. Then normal operation is:
 
 ```powershell
-Set-Location C:\Users\Administrator\Desktop\repos
-veronica expose --name desktop
+veronica expose C:\Users\Administrator\Desktop\repos --name desktop
 ```
 
-Use plain `veronica expose` when the Windows hostname `DESKTOP-RVEJA4B` is an acceptable device name. Keep the command running during use and stop it with `Ctrl+C`.
+Omit `--name` when the Windows hostname `DESKTOP-RVEJA4B` is an acceptable device name, but keep the explicit umbrella path. Keep the command running during use and stop it with `Ctrl+C`.
 
 After the 2026-07-13 Windows reboot, ChatGPT `list_devices` returned exactly `desktop`, proving that the worker and WireGuard path recovered. Preserve the local startup mechanism when changing worker installation.
 

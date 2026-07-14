@@ -116,7 +116,7 @@ On Linux or macOS:
 ```bash
 export VERONICA_GATEWAY="http://10.20.0.1:39100"
 export VERONICA_TOKEN="<worker token>"
-cd "$HOME/code"
+cd "$HOME/code/project"
 veronica expose
 ```
 
@@ -125,14 +125,14 @@ On Windows PowerShell:
 ```powershell
 $env:VERONICA_GATEWAY = "http://10.20.0.1:39100"
 $env:VERONICA_TOKEN = "<worker token>"
-Set-Location "C:\Users\you\code"
+Set-Location "C:\Users\you\code\project"
 veronica expose
 ```
 
-`veronica expose` exposes the current directory and uses the computer hostname as the device name. Supply a path or `--name` only when you want different values:
+`veronica expose` finds and exposes the current Git worktree root and uses the computer hostname as the device name. Outside a Git worktree, supply the directory explicitly. Home and filesystem roots require `--allow-broad-root`:
 
 ```bash
-veronica expose /home/user/code --name laptop
+veronica expose /home/user/code/project --name laptop
 ```
 
 Expose the smallest useful root. The worker must use the private gateway address, not the public hostname. Keep the command running, and stop the worker with `Ctrl+C`.
@@ -148,14 +148,13 @@ https://veronica.example.com/mcp
 Complete login and consent with the identity provider. Then call:
 
 ```text
-list_devices
-open_workspace(device="laptop", path="project")
+open_workspace(path=".")
 read_file(workspace_id="...", path="README.md")
 run_command(workspace_id="...", argv=["git", "status"])
 close_workspace(workspace_id="...")
 ```
 
-If tool discovery returns `401`, inspect the access token issuer, audience, expiry, and permissions. If the worker does not appear, test private connectivity to the gateway and confirm both processes use the same device token.
+Omit `device` when exactly one worker is online. If several workers are online, call `list_devices` and retry with the selected name. If tool discovery returns `401`, inspect the access token issuer, audience, expiry, and permissions. If the worker does not appear, test private connectivity to the gateway and confirm both processes use the same device token.
 
 ### 7. Verify the security boundary
 

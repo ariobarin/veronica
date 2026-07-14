@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { VeronicaError, type DeviceJob, type WorkerRequest, type WorkerResult } from "./protocol.js";
 
-const DEVICE_ONLINE_WINDOW_MS = 60_000;
+const DEFAULT_DEVICE_ONLINE_WINDOW_MS = 60_000;
+const DEFAULT_DEVICE_RETENTION_MS = 5 * 60_000;
 const DEFAULT_JOB_TIMEOUT_MS = 130_000;
 
 type DeviceRecord = {
   id: string;
   name: string;
   platform: string;
+  rootLabel: string;
   registeredAt: number;
   lastSeenAt: number;
   queue: DeviceJob[];
@@ -32,6 +34,7 @@ export type DeviceSummary = {
   id: string;
   name: string;
   platform: string;
+  rootLabel: string;
   online: boolean;
   lastSeenAt: string;
 };
@@ -42,18 +45,34 @@ export type WorkspaceSummary = {
   path: string;
 };
 
+export type BrokerOptions = {
+  now?: () => number;
+  deviceOnlineWindowMs?: number;
+  deviceRetentionMs?: number;
+};
+
 export class Broker {
   private readonly devices = new Map<string, DeviceRecord>();
   private readonly devicesByName = new Map<string, string>();
   private readonly pendingJobs = new Map<string, PendingJob>();
   private readonly workspaces = new Map<string, WorkspaceRecord>();
+  private readonly now: () => number;
+  private readonly deviceOnlineWindowMs: number;
+  private readonly deviceRetentionMs: number;
 
-  registerDevice(name: string, platform: string): string {
+  constructor(options: BrokerOptions = {}) {
+    this.now = options.now ?? Date.now;
+    this.deviceOnlineWindowMs = options.deviceOnlineWindowMs ?? DEFAULT_DEVICE_ONLINE_WINDOW_MS;
+    this.deviceRetentionMs = options.deviceRetentionMs ?? DEFAULT_DEVICE_RETENTION_MS;
+  }
+
+  registerDevice(name: string, platform: string, rootLabel = name): string {
+    this.pruneStaleDevices();
     const existingId = this.devicesByName.get(name);
-    const now = Date.now();
+    const now = this.now();
     if (existingId) {
       const existing = this.requireDevice(existingId);
-      if (now - existing.lastSeenAt <= DEVICE_ONLINE_WINDOW_MS) {
+      if (now - existing.lastSeenAt <= this.deviceOnlineWindowMs) {
         throw new VeronicaError("conflict", `Device name is already connected: ${name}`);
       }
       this.disconnectDevice(existingId, "Device reconnected");
@@ -64,6 +83,7 @@ export class Broker {
       id,
       name,
       platform,
+      rootLabel,
       registeredAt: now,
       lastSeenAt: now,
       queue: []
@@ -73,13 +93,15 @@ export class Broker {
   }
 
   listDevices(): DeviceSummary[] {
-    const now = Date.now();
+    this.pruneStaleDevices();
+    const now = this.now();
     return [...this.devices.values()]
       .map(device => ({
         id: device.id,
         name: device.name,
         platform: device.platform,
-        online: now - device.lastSeenAt <= DEVICE_ONLINE_WINDOW_MS,
+        rootLabel: device.rootLabel,
+        online: now - device.lastSeenAt <= this.deviceOnlineWindowMs,
         lastSeenAt: new Date(device.lastSeenAt).toISOString()
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -87,7 +109,7 @@ export class Broker {
 
   async pollDevice(deviceId: string, waitMs: number): Promise<DeviceJob | null> {
     const device = this.requireDevice(deviceId);
-    device.lastSeenAt = Date.now();
+    device.lastSeenAt = this.now();
 
     const queued = this.takeQueuedJob(device);
     if (queued) return queued;
@@ -101,7 +123,7 @@ export class Broker {
         settled = true;
         clearTimeout(timer);
         device.wakePoll = undefined;
-        device.lastSeenAt = Date.now();
+        device.lastSeenAt = this.now();
         resolve(this.takeQueuedJob(device));
       };
       const timer = setTimeout(finish, waitMs);
@@ -110,7 +132,7 @@ export class Broker {
   }
 
   completeJob(deviceId: string, jobId: string, result: WorkerResult): boolean {
-    this.requireDevice(deviceId).lastSeenAt = Date.now();
+    this.requireDevice(deviceId).lastSeenAt = this.now();
     const pending = this.pendingJobs.get(jobId);
     if (!pending) return false;
     if (pending.deviceId !== deviceId) throw new VeronicaError("conflict", "Job belongs to another device");
@@ -121,19 +143,16 @@ export class Broker {
     return true;
   }
 
-  async openWorkspace(deviceName: string, path: string): Promise<WorkspaceSummary> {
-    const deviceId = this.devicesByName.get(deviceName);
-    if (!deviceId) throw new VeronicaError("not_found", `Unknown device: ${deviceName}`);
-    this.requireOnlineDevice(deviceId);
-
-    const result = await this.enqueue(deviceId, { type: "open_workspace", path });
+  async openWorkspace(deviceName: string | undefined, path: string): Promise<WorkspaceSummary> {
+    const device = this.selectOnlineDevice(deviceName);
+    const result = await this.enqueue(device.id, { type: "open_workspace", path });
     if (!result.ok) throw new VeronicaError(result.error.code, result.error.message);
 
     const workspace: WorkspaceRecord = {
       id: randomUUID(),
-      deviceId,
+      deviceId: device.id,
       path,
-      createdAt: Date.now()
+      createdAt: this.now()
     };
     this.workspaces.set(workspace.id, workspace);
     return { id: workspace.id, deviceId: workspace.deviceId, path: workspace.path };
@@ -186,6 +205,40 @@ export class Broker {
     return null;
   }
 
+  private selectOnlineDevice(deviceName: string | undefined): DeviceRecord {
+    this.pruneStaleDevices();
+    if (deviceName) {
+      const deviceId = this.devicesByName.get(deviceName);
+      if (!deviceId) throw new VeronicaError("not_found", `Unknown device: ${deviceName}`);
+      return this.requireOnlineDevice(deviceId);
+    }
+
+    const online = [...this.devices.values()].filter(
+      device => this.now() - device.lastSeenAt <= this.deviceOnlineWindowMs
+    );
+    if (online.length === 0) throw new VeronicaError("unavailable", "No Veronica devices are online");
+    if (online.length > 1) {
+      throw new VeronicaError(
+        "conflict",
+        `Multiple Veronica devices are online: ${online.map(device => device.name).sort().join(", ")}`
+      );
+    }
+    return online[0]!;
+  }
+
+  private pruneStaleDevices(): void {
+    const busyDeviceIds = new Set([...this.pendingJobs.values()].map(job => job.deviceId));
+    const staleIds = [...this.devices.values()]
+      .filter(
+        device =>
+          this.now() - device.lastSeenAt > this.deviceRetentionMs &&
+          device.queue.length === 0 &&
+          !busyDeviceIds.has(device.id)
+      )
+      .map(device => device.id);
+    for (const deviceId of staleIds) this.disconnectDevice(deviceId, "Device record expired");
+  }
+
   private requireDevice(deviceId: string): DeviceRecord {
     const device = this.devices.get(deviceId);
     if (!device) throw new VeronicaError("not_found", "Unknown device");
@@ -194,7 +247,7 @@ export class Broker {
 
   private requireOnlineDevice(deviceId: string): DeviceRecord {
     const device = this.requireDevice(deviceId);
-    if (Date.now() - device.lastSeenAt > DEVICE_ONLINE_WINDOW_MS) {
+    if (this.now() - device.lastSeenAt > this.deviceOnlineWindowMs) {
       throw new VeronicaError("unavailable", `Device is offline: ${device.name}`);
     }
     return device;

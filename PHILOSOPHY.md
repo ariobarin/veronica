@@ -18,7 +18,7 @@ The gateway should remain suitable for a small relay VPS. It authenticates, disc
 
 ### Exposure is explicit and temporary by default
 
-A computer becomes available because a user runs `veronica expose <path>`. Stopping that process removes the useful connection. Persistent service mode may come later, but it must remain an explicit choice.
+A computer becomes available because a user runs `veronica expose` from a Git worktree or explicitly names a directory. Stopping that process removes the useful connection. Persistent service mode may come later, but it must remain an explicit choice.
 
 ### A directory is exposed, not a computer
 

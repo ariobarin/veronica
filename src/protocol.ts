@@ -119,7 +119,8 @@ export type DeviceJob = z.infer<typeof deviceJobSchema>;
 
 export const registerDeviceSchema = z.object({
   name: z.string().trim().min(1).max(64),
-  platform: z.string().trim().min(1).max(64)
+  platform: z.string().trim().min(1).max(64),
+  rootLabel: z.string().trim().min(1).max(128).optional()
 });
 
 export const pollDeviceSchema = z.object({

@@ -149,8 +149,7 @@ cd /path/to/veronica
 npm link
 export VERONICA_TOKEN="<protected worker token>"
 export VERONICA_GATEWAY="http://10.20.0.1:39100"
-cd "$HOME/code"
-veronica expose --name laptop
+veronica expose "$HOME/code/project" --name laptop
 ```
 
 Use a service manager or scheduled task if the worker must reconnect after reboot. Run it as a dedicated account when unattended access is required. The account permissions define what `run_command` can do.

@@ -63,7 +63,7 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
     {
       instructions: [
         "Veronica routes a small set of coding operations to explicitly exposed local workspaces.",
-        "Call list_devices, then open_workspace, then use the returned workspace_id."
+        "Call open_workspace directly. Omit device when exactly one worker is online; call list_devices only when selection is ambiguous."
       ].join(" ")
     }
   );
@@ -84,9 +84,9 @@ export function createVeronicaMcpServer(broker: Broker): McpServer {
     "open_workspace",
     {
       title: "Open Veronica workspace",
-      description: "Open a directory below a named device's exposed root.",
+      description: "Open a directory below an exposed root, selecting the only online device when device is omitted.",
       inputSchema: {
-        device: z.string().min(1),
+        device: z.string().min(1).optional(),
         path: relativePathSchema.default(".")
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
@@ -281,7 +281,7 @@ export function createGatewayApp(auth: GatewayAuthOptions, broker = new Broker()
   app.post("/device/register", deviceAuth, (req, res) => {
     try {
       const input = registerDeviceSchema.parse(req.body);
-      const deviceId = broker.registerDevice(input.name, input.platform);
+      const deviceId = broker.registerDevice(input.name, input.platform, input.rootLabel ?? input.name);
       res.status(201).json({ deviceId });
     } catch (error) {
       res.status(statusForError(error)).json({ error: toWorkerError(error) });
